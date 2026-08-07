@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "DFRobot_MatrixLidar.h"
+#include "weight_detect.h"
 
 DFRobot_MatrixLidar_I2C tof(0x33); // Default I2C address
 uint16_t buf[64];                  // 8x8 = 64 distance points, in mm
@@ -35,5 +36,11 @@ void loop() {
     Serial.println();
   }
   Serial.println("------------------------------");
+
+  // NEW: run detection on the same buf array
+  WeightResult result = detectWeight(buf);
+  printResult(result);
+  Serial.println("------------------------------");
+
   delay(100);
 }
