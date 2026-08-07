@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"name": "motors",
+			"path": "."
+		},
+		{
+			"name": "blinky",
+			"path": "../blinky"
+		}
+	],
+	"settings": {}
+}
