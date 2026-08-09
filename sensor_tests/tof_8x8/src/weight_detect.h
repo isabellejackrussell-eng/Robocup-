@@ -6,7 +6,7 @@
 const int GRID_SIZE = 8;
 const int NEAR_DELTA_MM = 40;          // how much closer than THIS pixel's own background counts as "object"
 const int MIN_CLUSTER_SIZE = 2;        // absolute floor, still checked before the distance-aware window
-const int FLATNESS_THRESHOLD_MM = 40;  // max depth spread allowed within one cluster
+const int FLATNESS_THRESHOLD_MM = 80;  // max depth spread allowed within one cluster
 const float WEIGHT_DIAMETER_MM = 50.0f;
 const float HFOV_DEG = 60.0f;          // SEN0628 horizontal FOV
 
@@ -26,7 +26,7 @@ void calibrateBackground(uint16_t distances[GRID_SIZE * GRID_SIZE]);
 void calibrateBackgroundAveraged(uint16_t frames[][GRID_SIZE * GRID_SIZE], int numFrames);
 
 // Main detection call - requires calibrateBackground() to have been called first.
-WeightResult detectWeight(uint16_t distances[GRID_SIZE * GRID_SIZE]);
+WeightResult detectWeight(uint16_t distances[GRID_SIZE * GRID_SIZE], bool verbose = true);
 
 void printResult(WeightResult r);
 

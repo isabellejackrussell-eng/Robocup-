@@ -48,7 +48,7 @@ void loop() {
   WeightResult result = detectWeight(buf);
   printResult(result);
   // weight_detect.h — add this alongside the existing detectWeight declaration
-  WeightResult detectWeight(uint16_t distances[GRID_SIZE * GRID_SIZE], bool verbose = false);
+  WeightResult detectWeight(uint16_t distances[GRID_SIZE * GRID_SIZE], bool verbose = true);
   Serial.println("------------------------------");
 
   delay(100);

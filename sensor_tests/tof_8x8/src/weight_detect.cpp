@@ -44,10 +44,16 @@ void calibrateBackgroundAveraged(uint16_t frames[][GRID_SIZE * GRID_SIZE], int n
 }
 
 // --- Step 2: per-pixel foreground test against that pixel's own background, not a frame-wide median ---
-bool isForeground(int row, int col, uint16_t measured) {
-  if (measured == 0 || measured == 4000) return false;         // no valid return
+static bool isForeground(int row, int col, uint16_t measured) {
+  if (measured == 0 || measured == 4000) return false;         // no valid return, nothing there
+
   uint16_t bg = backgroundMap[row][col];
-  if (bg == 0 || bg == 4000) return false;                     // no valid background reference here
+  if (bg == 0 || bg == 4000) {
+    // background had no return (out of range = effectively "far away") -
+    // any valid measurement here is closer than that, so it's foreground
+    return true;
+  }
+
   int16_t diff = (int16_t)bg - (int16_t)measured;
   return diff > NEAR_DELTA_MM;
 }
@@ -80,7 +86,7 @@ bool isFlatEnough(uint16_t minDist, uint16_t maxDist) {
   return (maxDist - minDist) <= FLATNESS_THRESHOLD_MM;
 }
 
-WeightResult detectWeight(uint16_t distances[GRID_SIZE * GRID_SIZE]) {
+WeightResult detectWeight(uint16_t distances[GRID_SIZE * GRID_SIZE], bool verbose) {
   WeightResult result = {false, 0, 0, 0, 0};
 
   if (!backgroundCalibrated) {
@@ -128,12 +134,19 @@ WeightResult detectWeight(uint16_t distances[GRID_SIZE * GRID_SIZE]) {
         if (d < minDist) minDist = d;
         if (d > maxDist) maxDist = d;
 
-        int dr[] = {-1,1,0,0}, dc[] = {0,0,-1,1};
+int dr[] = {-1,1,0,0}, dc[] = {0,0,-1,1};
         for (int k = 0; k < 4; k++) {
           int nr = cr + dr[k], nc = cc + dc[k];
           if (nr>=0 && nr<GRID_SIZE && nc>=0 && nc<GRID_SIZE && isNear[nr][nc] && !visited[nr][nc]) {
-            visited[nr][nc] = true;
-            stackR[sp] = nr; stackC[sp] = nc; sp++;
+            uint16_t neighborDist = distances[nr * GRID_SIZE + nc];
+            uint16_t newMin = min(minDist, neighborDist);
+            uint16_t newMax = max(maxDist, neighborDist);
+            // only grow the cluster if it stays within one object's depth range -
+            // stops it bleeding into an adjacent floor/wall gradient
+            if ((newMax - newMin) <= FLATNESS_THRESHOLD_MM) {
+              visited[nr][nc] = true;
+              stackR[sp] = nr; stackC[sp] = nc; sp++;
+            }
           }
         }
       }
@@ -147,28 +160,8 @@ WeightResult detectWeight(uint16_t distances[GRID_SIZE * GRID_SIZE]) {
     }
   }
 
-  if (bestSize >= MIN_CLUSTER_SIZE) {
+if (bestSize >= MIN_CLUSTER_SIZE) {
     int avgDist = bestSumDist / bestSize;
-
-    // Steps 4-6: reject anything that isn't a compact, flat-faced ~50mm object
-    if (!sizeIsPlausible(bestSize, avgDist)) return result;
-    if (looksLikeAPlane(bestMinRow, bestMaxRow, bestMinCol, bestMaxCol)) return result;
-    if (!isFlatEnough(bestMinDist, bestMaxDist)) return result;
-
-    result.found = true;
-    result.clusterSize = bestSize;
-    result.avgRow = bestSumRow / bestSize;
-    result.avgCol = bestSumCol / bestSize;
-    result.avgDistMM = avgDist;
-  }
-  return result;
-}
-
-void printResult(WeightResult r) {
-// weight_detect.cpp — replace the final block of detectWeight with this
-  if (bestSize >= MIN_CLUSTER_SIZE) {
-    int avgDist = bestSumDist / bestSize;
-    float expected = expectedWidthPx(avgDist);
     bool sizeOk  = sizeIsPlausible(bestSize, avgDist);
     bool planeOk = !looksLikeAPlane(bestMinRow, bestMaxRow, bestMinCol, bestMaxCol);
     bool flatOk  = isFlatEnough(bestMinDist, bestMaxDist);
@@ -176,10 +169,6 @@ void printResult(WeightResult r) {
     if (verbose) {
       Serial.print("candidate: size="); Serial.print(bestSize);
       Serial.print(" dist="); Serial.print(avgDist);
-      Serial.print(" expectedWidthPx="); Serial.print(expected, 2);
-      Serial.print(" rowSpan="); Serial.print(bestMaxRow - bestMinRow + 1);
-      Serial.print(" colSpan="); Serial.print(bestMaxCol - bestMinCol + 1);
-      Serial.print(" depthSpread="); Serial.print(bestMaxDist - bestMinDist);
       Serial.print(" | sizeOk="); Serial.print(sizeOk);
       Serial.print(" planeOk="); Serial.print(planeOk);
       Serial.print(" flatOk="); Serial.println(flatOk);
@@ -194,4 +183,19 @@ void printResult(WeightResult r) {
     result.avgDistMM = avgDist;
   }
   return result;
+}
+
+void printResult(WeightResult r) {
+  if (r.found) {
+    Serial.print("WEIGHT found | col=");
+    Serial.print(r.avgCol, 1);
+    Serial.print(" row=");
+    Serial.print(r.avgRow, 1);
+    Serial.print(" dist=");
+    Serial.print(r.avgDistMM);
+    Serial.print("mm size=");
+    Serial.println(r.clusterSize);
+  } else {
+    Serial.println("no weight");
+  }
 }
