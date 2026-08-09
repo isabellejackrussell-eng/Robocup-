@@ -20,9 +20,17 @@ void setup() {
     delay(1000);
   }
   Serial.println("init success, starting readings...");
+  Serial.println("Point sensor at empty scene, then send 'c' to calibrate background.");
 }
 
 void loop() {
+  // NEW: check for calibration command before reading the frame we'll act on
+  if (Serial.available() && Serial.read() == 'c') {
+    tof.getAllData(buf);       // grab a frame - nothing should be in view right now
+    calibrateBackground(buf);
+    Serial.println("Background calibrated");
+  }
+
   tof.getAllData(buf);
 
   for (uint8_t i = 0; i < 8; i++) {
@@ -37,9 +45,10 @@ void loop() {
   }
   Serial.println("------------------------------");
 
-  // NEW: run detection on the same buf array
   WeightResult result = detectWeight(buf);
   printResult(result);
+  // weight_detect.h — add this alongside the existing detectWeight declaration
+  WeightResult detectWeight(uint16_t distances[GRID_SIZE * GRID_SIZE], bool verbose = false);
   Serial.println("------------------------------");
 
   delay(100);
