@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../../.."
+		},
+		{
+			"name": "encoder",
+			"path": "../../encoder"
+		},
+		{
+			"name": "tof_8x8",
+			"path": ".."
+		}
+	],
+	"settings": {}
+}
