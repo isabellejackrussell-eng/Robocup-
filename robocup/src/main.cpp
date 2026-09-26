@@ -10,6 +10,9 @@
 #include "return_to_base.h" 
 #include "smartServo.h"
 #include "inductiveProximity.h"
+#include "tof.h"
+#include "106_TOF_X8.h"
+#include "optical_flow.h"
 
 
 // Task period Definitions
@@ -102,9 +105,15 @@ void setup()
     robot_init();
     task_init();
     motors_init();
+    optical_flow_init();
 
     Wire.begin();
 
+    // --------------------------------------------------------
+    // 8x8 TOF INITIALISATION
+    // --------------------------------------------------------
+
+    init_8x8();
 
     // --------------------------------------------------------
     // TEMPORARY SERVO TEST
@@ -177,9 +186,13 @@ void task_init() {
 
 
 void loop() {
-  motors_update();
-  smartServoUpdate();
-  // taskManager.execute();    //execute the scheduler
+    //motors_update();
+    //smartServoUpdate();
+    // taskManager.execute();    //execute the scheduler
+    //range_tof_init();
+    //range_tof_test();
+    //test_8x8();
 
+    optical_flow_test();
 }
 

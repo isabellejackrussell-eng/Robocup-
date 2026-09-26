@@ -9,7 +9,7 @@
 // HARDWARE OBJECTS
 // ============================================================
 
-static SX1509 io;
+static SX1509 io;   // the one 505_TOF_Expander board, at 0x71
 static VL53L1X rangeSensors[RANGE_TOF_COUNT];
 
 // ============================================================
@@ -173,4 +173,37 @@ bool range_tof_is_valid(uint8_t index)
         return false;
 
     return rangeValid[index];
+}
+
+
+// ============================================================
+// SELF-TEST
+// ============================================================
+
+void range_tof_test()
+{
+    Serial.println("[TOF TEST] Starting range ToF test");
+
+    unsigned long testStart = millis();
+
+    while (millis() - testStart < TOF_TEST_DURATION_MS)
+    {
+        range_tof_poll();
+
+        for (uint8_t i = 0; i < RANGE_TOF_COUNT; i++)
+        {
+            Serial.print("Sensor ");
+            Serial.print(i);
+            Serial.print(": ");
+            Serial.print(range_tof_get_distance_mm(i));
+            Serial.print("mm  valid: ");
+            Serial.print(range_tof_is_valid(i));
+            Serial.print("   ");
+        }
+        Serial.println();
+
+        delay(TOF_TEST_PRINT_MS);
+    }
+
+    Serial.println("[TOF TEST] Done");
 }
