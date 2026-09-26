@@ -18,8 +18,7 @@
 
 // SX1509 pin connected to XSHUT of each VL53L1X
 const uint8_t RANGE_TOF_XSHUT_PINS[RANGE_TOF_COUNT] = {
-    0, 1, PIN_UNASSIGNED, PIN_UNASSIGNED,
-    PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED
+    0, 1, 2, 3, 4, 5, 6, 7
 };
 
 // I2C addresses assigned to the VL53L1X sensors — all 8 must be

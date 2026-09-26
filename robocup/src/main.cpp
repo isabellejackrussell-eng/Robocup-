@@ -13,6 +13,7 @@
 #include "tof.h"
 #include "106_TOF_X8.h"
 #include "optical_flow.h"
+#include "imu.h"
 
 
 // Task period Definitions
@@ -88,6 +89,7 @@ void pin_init();
 void robot_init();
 void task_init();
 
+
 // put your setup code here, to run once:
 void setup()
 {
@@ -99,21 +101,13 @@ void setup()
     // Give external hardware some time to power up.
     delay(500);
 
-    smartServoInitialise();
-    inductiveSensorInitialise();
-
-    robot_init();
-    task_init();
-    motors_init();
-    optical_flow_init();
-
     Wire.begin();
 
     // --------------------------------------------------------
-    // 8x8 TOF INITIALISATION
+    // SENSOR INITIALISATION
     // --------------------------------------------------------
 
-    init_8x8();
+    imu_init();
 
     // --------------------------------------------------------
     // TEMPORARY SERVO TEST
@@ -186,13 +180,13 @@ void task_init() {
 
 
 void loop() {
-    //motors_update();
     //smartServoUpdate();
     // taskManager.execute();    //execute the scheduler
-    //range_tof_init();
     //range_tof_test();
     //test_8x8();
+    //motors_test_forward_back();
+    imu_test();
 
-    optical_flow_test();
+    //optical_flow_test();
 }
 
