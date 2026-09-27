@@ -1,74 +1,205 @@
 #include <Arduino.h>
+#include <Wire.h>
+#include <math.h>
 
-#include "debug/debug_port.h"
-#include "schedulers/scheduler_claw_test.h"
-#include "schedulers/scheduler_full_integration_test.h"
-#include "schedulers/scheduler_main.h"
-#include "schedulers/scheduler_motion_test.h"
-#include "schedulers/scheduler_nav_motion_test.h"
-#include "schedulers/scheduler_sensor_claw_test.h"
-#include "schedulers/scheduler_sensor_test.h"
+#include <Adafruit_BNO055.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_TCS34725.h>
+#include <Bitcraze_PMW3901.h>
+#include <CircularBuffer.hpp>
+#include <DFRobot_MatrixLidar.h>
+#include <HerkulexServo.h>
+#include <Servo.h>
+#include <SparkFunSX1509.h>
+#include <TaskScheduler.h>
+#include <VL53L0X.h>
+#include <VL53L1X.h>
+#include <utility/imumaths.h>
 
-#ifndef ROBOT_MODE
-#define ROBOT_MODE 3
-#endif
+#include "filter_positionData.h"
+#include "filter_weightDetect.h"
+#include "hd_move_motors.h"
+#include "hd_move_servoArm.h"
+#include "hd_move_smartServos.h"
+#include "hd_raw_encoder.h"
+#include "hd_raw_inductiveProximity.h"
+#include "hd_raw_limitSwitch.h"
+#include "hd_raw_tof.h"
+#include "hd_raw_tof8x8.h"
+#include "hd_raw_ultrasonic.h"
+#include "hd_raw_xy.h"
 
-namespace {
-const __FlashStringHelper* modeName() {
-#if ROBOT_MODE == 1
-  return F("MOTION_TEST");
-#elif ROBOT_MODE == 2
-  return F("CLAW_TEST");
-#elif ROBOT_MODE == 3
-  return F("SENSOR_TEST (default safe mode)");
-#elif ROBOT_MODE == 4
-  return F("SENSOR_CLAW_TEST");
-#elif ROBOT_MODE == 5
-  return F("NAV_MOTION_TEST");
-#elif ROBOT_MODE == 6
-  return F("FULL_INTEGRATION_TEST");
-#elif ROBOT_MODE == 7
-  return F("COMPETITION");
-#else
-#error "Unknown ROBOT_MODE"
-#endif
+
+// Task period Definitions
+#define US_READ_TASK_PERIOD                 40
+#define IR_READ_TASK_PERIOD                 40
+#define COLOUR_READ_TASK_PERIOD             40
+#define SENSOR_AVERAGE_PERIOD               40
+#define SET_MOTOR_TASK_PERIOD               40
+#define WEIGHT_SCAN_TASK_PERIOD             40
+#define COLLECT_WEIGHT_TASK_PERIOD          40
+#define RETURN_TO_BASE_TASK_PERIOD          40
+#define DETECT_BASE_TASK_PERIOD             40
+#define UNLOAD_WEIGHTS_TASK_PERIOD          40
+#define CHECK_WATCHDOG_TASK_PERIOD          40
+#define VICTORY_DANCE_TASK_PERIOD           40
+
+// Task execution amount definitions: -1 means indefinitely
+#define US_READ_TASK_NUM_EXECUTE           -1
+#define IR_READ_TASK_NUM_EXECUTE           -1
+#define COLOUR_READ_TASK_NUM_EXECUTE       -1
+#define SENSOR_AVERAGE_NUM_EXECUTE         -1
+#define SET_MOTOR_TASK_NUM_EXECUTE         -1
+#define WEIGHT_SCAN_TASK_NUM_EXECUTE       -1
+#define COLLECT_WEIGHT_TASK_NUM_EXECUTE    -1
+#define RETURN_TO_BASE_TASK_NUM_EXECUTE    -1
+#define DETECT_BASE_TASK_NUM_EXECUTE       -1
+#define UNLOAD_WEIGHTS_TASK_NUM_EXECUTE    -1
+#define CHECK_WATCHDOG_TASK_NUM_EXECUTE    -1
+#define VICTORY_DANCE_TASK_NUM_EXECUTE     -1
+
+// Pin deffinitions
+#define IO_POWER  49
+
+// Serial deffinitions
+#define BAUD_RATE 115200
+
+Servo right_motor;
+Servo left_motor;
+
+
+//**********************************************************************************
+// Task Scheduler and Tasks
+//**********************************************************************************
+
+/* The first value is the period, second is how many times it executes
+   (-1 means indefinitely), third one is the callback function */
+
+// Tasks for reading sensors 
+Task tRead_ultrasonic(US_READ_TASK_PERIOD,       US_READ_TASK_NUM_EXECUTE,        &read_ultrasonic);
+Task tRead_infrared(IR_READ_TASK_PERIOD,         IR_READ_TASK_NUM_EXECUTE,        &read_infrared);
+Task tRead_colour(COLOUR_READ_TASK_PERIOD,       COLOUR_READ_TASK_NUM_EXECUTE,    &read_colour);
+Task tSensor_average(SENSOR_AVERAGE_PERIOD,      SENSOR_AVERAGE_NUM_EXECUTE,      &sensor_average);
+
+// Task to set the motor speeds and direction
+// Task tSet_motor(SET_MOTOR_TASK_PERIOD,           SET_MOTOR_TASK_NUM_EXECUTE,      &set_motor);
+
+// Tasks to scan for weights and collection upon detection
+Task tWeight_scan(WEIGHT_SCAN_TASK_PERIOD,       WEIGHT_SCAN_TASK_NUM_EXECUTE,    &weight_scan);
+Task tCollect_weight(COLLECT_WEIGHT_TASK_PERIOD, COLLECT_WEIGHT_TASK_NUM_EXECUTE, &collect_weight);
+
+// Tasks to search for bases and unload weights
+Task tReturn_to_base(RETURN_TO_BASE_TASK_PERIOD, RETURN_TO_BASE_TASK_NUM_EXECUTE, &return_to_base);
+Task tDetect_base(DETECT_BASE_TASK_PERIOD,       DETECT_BASE_TASK_NUM_EXECUTE,    &detect_base);
+Task tUnload_weights(UNLOAD_WEIGHTS_TASK_PERIOD, UNLOAD_WEIGHTS_TASK_NUM_EXECUTE, &unload_weights);
+
+// Tasks to check the 'watchdog' timer (These will need to be added in)
+//Task tCheck_watchdog(CHECK_WATCHDOG_TASK_PERIOD, CHECK_WATCHDOG_TASK_NUM_EXECUTE, &check_watchdog);
+//Task tVictory_dance(VICTORY_DANCE_TASK_PERIOD,   VICTORY_DANCE_TASK_NUM_EXECUTE,  &victory_dance);
+Scheduler taskManager;
+
+// Function Definitions
+void pin_init();
+void robot_init();
+void task_init();
+
+
+// put your setup code here, to run once:
+void setup()
+{
+    Serial.begin(BAUD_RATE);
+
+    // Enable CPU-board IO power first.
+    pin_init();
+
+    // Give external hardware some time to power up.
+    delay(500);
+
+    Wire.begin();
+
+    // --------------------------------------------------------
+    // SENSOR INITIALISATION
+    // --------------------------------------------------------
+
+    imu_init();
+
+    // --------------------------------------------------------
+    // TEMPORARY SERVO TEST
+    // --------------------------------------------------------
+
+    delay(500);
+    smartServoPrintStatus(1);
+
+    smartServoPrintStatus(4);
+
+    setServoAngle(1, 0);
+    setServoAngle(4, 0);
+
+    smartServoPrintStatus(1);
+
+    smartServoPrintStatus(4);
 }
-}  // namespace
 
-void setup() {
-  debug::begin();
-  debug::printStartupBanner(modeName());
-#if ROBOT_MODE == 1
-  schedulers::motion_test::setup();
-#elif ROBOT_MODE == 2
-  schedulers::claw_test::setup();
-#elif ROBOT_MODE == 3
-  schedulers::sensor_test::setup();
-#elif ROBOT_MODE == 4
-  schedulers::sensor_claw_test::setup();
-#elif ROBOT_MODE == 5
-  schedulers::nav_motion_test::setup();
-#elif ROBOT_MODE == 6
-  schedulers::full_integration_test::setup();
-#elif ROBOT_MODE == 7
-  schedulers::main_scheduler::setup();
-#endif
+// Initialise the pins as inputs and outputs (otherwise, they won't work) 
+// Set as high or low
+void pin_init(){
+    
+    Serial.println("Pins have been initialised \n"); 
+
+    pinMode(IO_POWER, OUTPUT);              //Pin 49 is used to enable IO power
+    digitalWrite(IO_POWER, 1);              //Enable IO power on main CPU board
 }
+
+// Set default robot state
+void robot_init() {
+    Serial.println("Robot is ready \n");
+}
+
+// Initialise the tasks for the scheduler
+void task_init() {  
+  // This is a class/library function. Initialise the task scheduler
+  taskManager.init();     
+ 
+  // Add tasks to the scheduler
+  taskManager.addTask(tRead_ultrasonic);   //reading ultrasonic 
+  taskManager.addTask(tRead_infrared);
+  taskManager.addTask(tRead_colour);
+  taskManager.addTask(tSensor_average);
+  // taskManager.addTask(tSet_motor); 
+  taskManager.addTask(tWeight_scan);
+  taskManager.addTask(tCollect_weight);
+  taskManager.addTask(tReturn_to_base);
+  taskManager.addTask(tDetect_base);
+  taskManager.addTask(tUnload_weights);
+
+  //taskManager.addTask(tCheck_watchdog);
+  //taskManager.addTask(tVictory_dance);      
+
+  //enable the tasks
+  tRead_ultrasonic.enable();
+  tRead_infrared.enable();
+  tRead_colour.enable();
+  tSensor_average.enable();
+  // tSet_motor.enable();
+  tWeight_scan.enable();
+  tCollect_weight.enable();
+  tReturn_to_base.enable();
+  tDetect_base.enable();
+  tUnload_weights.enable();
+ //tCheck_watchdog.enable();
+ //tVictory_dance.enable();
+
+ Serial.println("Tasks have been initialised \n");
+}
+
 
 void loop() {
-#if ROBOT_MODE == 1
-  schedulers::motion_test::loop();
-#elif ROBOT_MODE == 2
-  schedulers::claw_test::loop();
-#elif ROBOT_MODE == 3
-  schedulers::sensor_test::loop();
-#elif ROBOT_MODE == 4
-  schedulers::sensor_claw_test::loop();
-#elif ROBOT_MODE == 5
-  schedulers::nav_motion_test::loop();
-#elif ROBOT_MODE == 6
-  schedulers::full_integration_test::loop();
-#elif ROBOT_MODE == 7
-  schedulers::main_scheduler::loop();
-#endif
+    //smartServoUpdate();
+    // taskManager.execute();    //execute the scheduler
+    //range_tof_test();
+    //test_8x8();
+    //motors_test_forward_back();
+    imu_test();
+
+    //optical_flow_test();
 }
