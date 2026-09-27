@@ -5,6 +5,8 @@ Servo myServo;
 const int servoPin = 25;
 const int ledPin = 13;
 
+// down < 90 < up
+
 void setup() {
   pinMode(ledPin, OUTPUT);
   myServo.attach(servoPin);
@@ -14,12 +16,12 @@ void setup() {
 
 void loop() {
   digitalWrite(ledPin, HIGH);
-  myServo.write(60);
+  myServo.write(160);
   delay(1000);
   digitalWrite(ledPin, LOW);
 
   digitalWrite(ledPin, HIGH);
-  myServo.write(120);
+  myServo.write(90);
   delay(1000);
   digitalWrite(ledPin, LOW);
 }

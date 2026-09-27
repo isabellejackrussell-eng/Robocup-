@@ -1,153 +1,99 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
-#include <utility/imumaths.h>
 
-/* This driver uses the Adafruit unified sensor library (Adafruit_Sensor),
-   which provides a common 'type' for sensor data and some helper functions.
+#include "motion_filter.h"
 
-   To use this driver you will also need to download the Adafruit_Sensor
-   library and include it in your libraries folder.
-
-   You should also assign a unique ID to this sensor for use with
-   the Adafruit Sensor API so that you can identify this particular
-   sensor in any data logs, etc.  To assign a unique ID, simply
-   provide an appropriate value in the constructor below (12345
-   is used by default in this example).
-
-   Connections
-   ===========
-   Connect SCL to analog 5
-   Connect SDA to analog 4
-   Connect VDD to 3.3-5V DC
-   Connect GROUND to common ground
-
-   History
-   =======
-   2015/MAR/03  - First release (KTOWN)
-*/
-
-/* Set the delay between fresh samples */
-uint16_t BNO055_SAMPLERATE_DELAY_MS = 100;
-
-// Check I2C device address and correct line below (by default address is 0x29 or 0x28)
-//                                   id, address
-Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
-
-// PlatformIO compiles this as ordinary C++, so it doesn't auto-generate
-// prototypes for functions called before they're defined (unlike the
-// Arduino IDE) - printEvent() needs a forward declaration here.
-void printEvent(sensors_event_t* event);
-
-
-void setup(void)
+namespace
 {
-  Serial.begin(115200);
-  Serial.println("Orientation Sensor Test"); Serial.println("");
+constexpr uint8_t BNO055_ADDRESS = 0x28;
+constexpr uint32_t SAMPLE_INTERVAL_MS = 20; // 50 Hz filter update
+constexpr uint32_t PRINT_INTERVAL_MS = 100;
 
-  /* Initialise the sensor */
-  if (!bno.begin())
-  {
-    /* There was a problem detecting the BNO055 ... check your connections */
-    Serial.print("Ooops, no BNO055 detected ... Check your wiring or I2C ADDR!");
-    while (1);
-  }
-
-  delay(1000);
+Adafruit_BNO055 bno(55, BNO055_ADDRESS);
+MotionFilter motionFilter;
 }
 
-void loop(void)
+void setup()
 {
-  //could add VECTOR_ACCELEROMETER, VECTOR_MAGNETOMETER,VECTOR_GRAVITY...
-  sensors_event_t orientationData , angVelocityData , linearAccelData, magnetometerData, accelerometerData, gravityData;
-  bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
-  bno.getEvent(&angVelocityData, Adafruit_BNO055::VECTOR_GYROSCOPE);
-  bno.getEvent(&linearAccelData, Adafruit_BNO055::VECTOR_LINEARACCEL);
-  bno.getEvent(&magnetometerData, Adafruit_BNO055::VECTOR_MAGNETOMETER);
-  bno.getEvent(&accelerometerData, Adafruit_BNO055::VECTOR_ACCELEROMETER);
-  bno.getEvent(&gravityData, Adafruit_BNO055::VECTOR_GRAVITY);
+    Serial.begin(115200);
+    Wire.begin();
 
-  printEvent(&orientationData);
-  printEvent(&angVelocityData);
-  printEvent(&linearAccelData);
-  printEvent(&magnetometerData);
-  printEvent(&accelerometerData);
-  printEvent(&gravityData);
+    if (!bno.begin())
+    {
+        Serial.println("ERROR: BNO055 not detected at address 0x28");
+        while (true)
+        {
+            delay(1000);
+        }
+    }
 
-  int8_t boardTemp = bno.getTemp();
-  Serial.println();
-  Serial.print(F("temperature: "));
-  Serial.println(boardTemp);
+    delay(1000);
+    bno.setExtCrystalUse(true);
+    motionFilter.begin();
 
-  uint8_t system, gyro, accel, mag = 0;
-  bno.getCalibration(&system, &gyro, &accel, &mag);
-  Serial.println();
-  Serial.print("Calibration: Sys=");
-  Serial.print(system);
-  Serial.print(" Gyro=");
-  Serial.print(gyro);
-  Serial.print(" Accel=");
-  Serial.print(accel);
-  Serial.print(" Mag=");
-  Serial.println(mag);
-
-  Serial.println("--");
-  delay(BNO055_SAMPLERATE_DELAY_MS);
+    Serial.println("BNO055 motion estimator started");
+    Serial.println("Keep the robot completely still for the first 2 seconds.");
 }
 
-void printEvent(sensors_event_t* event) {
-  double x = -1000000, y = -1000000 , z = -1000000; //dumb values, easy to spot problem
-  if (event->type == SENSOR_TYPE_ACCELEROMETER) {
-    Serial.print("Accl:");
-    x = event->acceleration.x;
-    y = event->acceleration.y;
-    z = event->acceleration.z;
-  }
-  else if (event->type == SENSOR_TYPE_ORIENTATION) {
-    Serial.print("Orient:");
-    x = event->orientation.x;
-    y = event->orientation.y;
-    z = event->orientation.z;
-  }
-  else if (event->type == SENSOR_TYPE_MAGNETIC_FIELD) {
-    Serial.print("Mag:");
-    x = event->magnetic.x;
-    y = event->magnetic.y;
-    z = event->magnetic.z;
-  }
-  else if (event->type == SENSOR_TYPE_GYROSCOPE) {
-    Serial.print("Gyro:");
-    x = event->gyro.x;
-    y = event->gyro.y;
-    z = event->gyro.z;
-  }
-  else if (event->type == SENSOR_TYPE_ROTATION_VECTOR) {
-    Serial.print("Rot:");
-    x = event->gyro.x;
-    y = event->gyro.y;
-    z = event->gyro.z;
-  }
-  else if (event->type == SENSOR_TYPE_LINEAR_ACCELERATION) {
-    Serial.print("Linear:");
-    x = event->acceleration.x;
-    y = event->acceleration.y;
-    z = event->acceleration.z;
-  }
-  else if (event->type == SENSOR_TYPE_GRAVITY) {
-    Serial.print("Gravity:");
-    x = event->acceleration.x;
-    y = event->acceleration.y;
-    z = event->acceleration.z;
-  }
-  else {
-    Serial.print("Unk:");
-  }
+void loop()
+{
+    static uint32_t previousSampleMs = millis();
+    static uint32_t previousPrintMs = 0;
 
-  Serial.print("\tx= ");
-  Serial.print(x);
-  Serial.print(" |\ty= ");
-  Serial.print(y);
-  Serial.print(" |\tz= ");
-  Serial.println(z);
+    const uint32_t nowMs = millis();
+    const uint32_t elapsedMs = nowMs - previousSampleMs;
+    if (elapsedMs < SAMPLE_INTERVAL_MS)
+    {
+        return;
+    }
+    previousSampleMs = nowMs;
+
+    const imu::Vector<3> linearAcceleration =
+        bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+    const imu::Vector<3> gyroscope =
+        bno.getVector(Adafruit_BNO055::VECTOR_GYROSCOPE);
+    const imu::Vector<3> euler =
+        bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+    const imu::Quaternion orientation = bno.getQuat();
+
+    motionFilter.update(linearAcceleration,
+                        gyroscope,
+                        orientation,
+                        euler.x(), // heading
+                        euler.y(), // roll
+                        euler.z(), // pitch
+                        elapsedMs / 1000.0f);
+
+    if (nowMs - previousPrintMs < PRINT_INTERVAL_MS)
+    {
+        return;
+    }
+    previousPrintMs = nowMs;
+
+    const MotionEstimate &motion = motionFilter.estimate();
+    if (!motion.calibrated)
+    {
+        Serial.println("CALIBRATING - keep the robot still");
+        return;
+    }
+
+    Serial.print("heading_deg=");
+    Serial.print(motion.headingDeg, 1);
+    Serial.print(", roll_deg=");
+    Serial.print(motion.rollDeg, 1);
+    Serial.print(", pitch_deg=");
+    Serial.print(motion.pitchDeg, 1);
+    Serial.print(", distance_m=");
+    Serial.print(motion.distanceTravelledMetres, 3);
+    Serial.print(", displacement_m=");
+    Serial.print(motion.displacementMetres, 3);
+    Serial.print(", x_m=");
+    Serial.print(motion.positionXMetres, 3);
+    Serial.print(", y_m=");
+    Serial.print(motion.positionYMetres, 3);
+    Serial.print(", speed_mps=");
+    Serial.print(motion.speedMetresPerSecond, 3);
+    Serial.print(", stationary=");
+    Serial.println(motion.stationary ? "yes" : "no");
 }
