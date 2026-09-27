@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 
+#include "hd_raw_tof.h"
 #include "hd_raw_tof8x8.h"
 
 namespace filter_weightDetect {
@@ -33,6 +34,35 @@ WeightResult detectWeight(
     bool verbose = true);
 
 void printWeightResult(const WeightResult& result);
+
+// -----------------------------------------------------------------------------
+// Six single-point ToF sensors
+// -----------------------------------------------------------------------------
+
+constexpr uint8_t kRangeDetectionCount = 4;
+
+enum class RangeObjectType : uint8_t {
+  none,
+  weight,
+  wall,
+  unknown,
+};
+
+struct RangeObjectDetection {
+  RangeObjectType type;
+  uint16_t distanceMm;
+};
+
+// Clears the three-sample debounce/filter state.
+void resetRangeDetections();
+
+// Updates two bottom/top weight-detection pairs (0/1 and 2/3), followed by
+// the two wall-only sensors (4 and 5).
+void updateRangeDetections(const hd_raw_tof::Readings& readings);
+
+RangeObjectDetection getRangeDetection(uint8_t detectionIndex);
+const char* rangeObjectTypeName(RangeObjectType type);
+void printRangeDetections();
 
 }  // namespace filter_weightDetect
 

@@ -315,4 +315,151 @@ void printWeightResult(const WeightResult& result) {
   Serial.println(result.clusterSize);
 }
 
+namespace {
+
+constexpr uint16_t kRangeObjectMaximumDistanceMm = 2000;
+constexpr uint8_t kRangeStableSampleCount = 3;
+constexpr uint8_t kPairedDetectionCount = 2;
+
+struct RangeFilterState {
+  RangeObjectDetection filtered;
+  RangeObjectDetection candidate;
+  uint8_t sampleCount;
+};
+
+RangeFilterState rangeStates[kRangeDetectionCount] = {};
+
+bool rangeSensorSeesObject(
+    const hd_raw_tof::Readings& readings,
+    uint8_t sensorIndex) {
+  if (sensorIndex >= hd_raw_tof::kSensorCount ||
+      !readings[sensorIndex].valid) {
+    return false;
+  }
+
+  const uint16_t distanceMm = readings[sensorIndex].distanceMm;
+  return distanceMm > 0 && distanceMm <= kRangeObjectMaximumDistanceMm;
+}
+
+RangeObjectDetection classifyPairedSensors(
+    const hd_raw_tof::Readings& readings,
+    uint8_t pairIndex) {
+  const uint8_t bottomSensor = pairIndex * 2;
+  const uint8_t topSensor = bottomSensor + 1;
+  const bool bottomSeen = rangeSensorSeesObject(readings, bottomSensor);
+  const bool topSeen = rangeSensorSeesObject(readings, topSensor);
+
+  if (!bottomSeen) {
+    return {topSeen ? RangeObjectType::unknown : RangeObjectType::none, 0};
+  }
+
+  return {
+      topSeen ? RangeObjectType::wall : RangeObjectType::weight,
+      readings[bottomSensor].distanceMm,
+  };
+}
+
+RangeObjectDetection classifyWallSensor(
+    const hd_raw_tof::Readings& readings,
+    uint8_t sensorIndex) {
+  if (!rangeSensorSeesObject(readings, sensorIndex)) {
+    return {RangeObjectType::none, 0};
+  }
+
+  return {RangeObjectType::wall, readings[sensorIndex].distanceMm};
+}
+
+void updateRangeFilter(
+    RangeFilterState& state,
+    const RangeObjectDetection& reading) {
+  if (reading.type != state.candidate.type) {
+    state.candidate = reading;
+    state.sampleCount = 1;
+  } else {
+    state.candidate.distanceMm = reading.distanceMm;
+    if (state.sampleCount < kRangeStableSampleCount) {
+      ++state.sampleCount;
+    }
+  }
+
+  if (state.sampleCount >= kRangeStableSampleCount) {
+    state.filtered = state.candidate;
+  }
+}
+
+}  // namespace
+
+void resetRangeDetections() {
+  for (uint8_t detection = 0;
+       detection < kRangeDetectionCount;
+       ++detection) {
+    rangeStates[detection].filtered = {RangeObjectType::none, 0};
+    rangeStates[detection].candidate = {RangeObjectType::none, 0};
+    rangeStates[detection].sampleCount = 0;
+  }
+}
+
+void updateRangeDetections(const hd_raw_tof::Readings& readings) {
+  for (uint8_t pair = 0; pair < kPairedDetectionCount; ++pair) {
+    updateRangeFilter(rangeStates[pair], classifyPairedSensors(readings, pair));
+  }
+
+  updateRangeFilter(rangeStates[2], classifyWallSensor(readings, 4));
+  updateRangeFilter(rangeStates[3], classifyWallSensor(readings, 5));
+}
+
+RangeObjectDetection getRangeDetection(uint8_t detectionIndex) {
+  if (detectionIndex >= kRangeDetectionCount) {
+    return {RangeObjectType::unknown, 0};
+  }
+
+  return rangeStates[detectionIndex].filtered;
+}
+
+const char* rangeObjectTypeName(RangeObjectType type) {
+  switch (type) {
+    case RangeObjectType::none:
+      return "NONE";
+    case RangeObjectType::weight:
+      return "WEIGHT";
+    case RangeObjectType::wall:
+      return "WALL";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+void printRangeDetections() {
+  for (uint8_t detectionIndex = 0;
+       detectionIndex < kRangeDetectionCount;
+       ++detectionIndex) {
+    const RangeObjectDetection detection =
+        getRangeDetection(detectionIndex);
+
+    if (detectionIndex < kPairedDetectionCount) {
+      Serial.print("Pair ");
+      Serial.print(detectionIndex);
+    } else {
+      Serial.print("Wall sensor ");
+      Serial.print(detectionIndex + 2);
+    }
+
+    Serial.print(": ");
+    Serial.print(rangeObjectTypeName(detection.type));
+
+    if (detection.type != RangeObjectType::none &&
+        detection.distanceMm > 0) {
+      Serial.print(" at ");
+      Serial.print(detection.distanceMm);
+      Serial.print("mm");
+    }
+
+    if (detectionIndex + 1 < kRangeDetectionCount) {
+      Serial.print("   ");
+    }
+  }
+
+  Serial.println();
+}
+
 }  // namespace filter_weightDetect

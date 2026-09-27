@@ -1,27 +1,9 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <math.h>
 
-#include <Adafruit_BNO055.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_TCS34725.h>
-#include <Bitcraze_PMW3901.h>
-#include <CircularBuffer.hpp>
-#include <DFRobot_MatrixLidar.h>
-#include <HerkulexServo.h>
-#include <Servo.h>
-#include <SparkFunSX1509.h>
-#include <TaskScheduler.h>
-#include <VL53L0X.h>
-#include <VL53L1X.h>
-#include <utility/imumaths.h>
-
-#include "filter_positionData.h"
 #include "filter_weightDetect.h"
-#include "hd_move_motors.h"
 #include "hd_move_servoArm.h"
 #include "hd_move_smartServos.h"
-#include "hd_raw_encoder.h"
 #include "hd_raw_inductiveProximity.h"
 #include "hd_raw_limitSwitch.h"
 #include "hd_raw_tof.h"
@@ -29,177 +11,270 @@
 #include "hd_raw_ultrasonic.h"
 #include "hd_raw_xy.h"
 
+// These modules are intentionally disabled until they have implementations.
+// #include "filter_positionData.h"
+// #include "hd_move_motors.h"
+// #include "hd_raw_encoder.h"
 
-// Task period Definitions
-#define US_READ_TASK_PERIOD                 40
-#define IR_READ_TASK_PERIOD                 40
-#define COLOUR_READ_TASK_PERIOD             40
-#define SENSOR_AVERAGE_PERIOD               40
-#define SET_MOTOR_TASK_PERIOD               40
-#define WEIGHT_SCAN_TASK_PERIOD             40
-#define COLLECT_WEIGHT_TASK_PERIOD          40
-#define RETURN_TO_BASE_TASK_PERIOD          40
-#define DETECT_BASE_TASK_PERIOD             40
-#define UNLOAD_WEIGHTS_TASK_PERIOD          40
-#define CHECK_WATCHDOG_TASK_PERIOD          40
-#define VICTORY_DANCE_TASK_PERIOD           40
+namespace {
 
-// Task execution amount definitions: -1 means indefinitely
-#define US_READ_TASK_NUM_EXECUTE           -1
-#define IR_READ_TASK_NUM_EXECUTE           -1
-#define COLOUR_READ_TASK_NUM_EXECUTE       -1
-#define SENSOR_AVERAGE_NUM_EXECUTE         -1
-#define SET_MOTOR_TASK_NUM_EXECUTE         -1
-#define WEIGHT_SCAN_TASK_NUM_EXECUTE       -1
-#define COLLECT_WEIGHT_TASK_NUM_EXECUTE    -1
-#define RETURN_TO_BASE_TASK_NUM_EXECUTE    -1
-#define DETECT_BASE_TASK_NUM_EXECUTE       -1
-#define UNLOAD_WEIGHTS_TASK_NUM_EXECUTE    -1
-#define CHECK_WATCHDOG_TASK_NUM_EXECUTE    -1
-#define VICTORY_DANCE_TASK_NUM_EXECUTE     -1
+constexpr uint8_t kIoPowerPin = 49;
+constexpr uint32_t kBaudRate = 115200;
+constexpr uint32_t kSerialWaitMs = 3000;
+constexpr uint32_t kReportPeriodMs = 500;
 
-// Pin deffinitions
-#define IO_POWER  49
+bool tof8x8Ready = false;
+bool xyReady = false;
+bool limitSwitchReady = false;
+bool servoArmReady = false;
+uint32_t lastReportMs = 0;
 
-// Serial deffinitions
-#define BAUD_RATE 115200
+void printInitialisationResult(const char* device, bool success) {
+  Serial.print("[INIT] ");
+  Serial.print(device);
+  Serial.print(": ");
+  Serial.println(success ? "OK" : "FAILED");
+}
 
-Servo right_motor;
-Servo left_motor;
+void initialiseIoPower() {
+  pinMode(kIoPowerPin, OUTPUT);
+  digitalWrite(kIoPowerPin, HIGH);
+  delay(500);
+  printInitialisationResult("CPU-board I/O power", true);
+}
 
+void initialiseSensors() {
+  const bool tofReady = hd_raw_tof::initialise();
+  printInitialisationResult("six ToF sensors", tofReady);
 
-//**********************************************************************************
-// Task Scheduler and Tasks
-//**********************************************************************************
+  for (uint8_t sensor = 0; sensor < hd_raw_tof::kSensorCount; ++sensor) {
+    Serial.print("  ToF ");
+    Serial.print(sensor);
+    Serial.print(" (");
+    Serial.print(hd_raw_tof::sensorModelName(sensor));
+    Serial.print("): ");
+    Serial.println(
+        hd_raw_tof::isSensorInitialised(sensor) ? "OK" : "FAILED");
+  }
 
-/* The first value is the period, second is how many times it executes
-   (-1 means indefinitely), third one is the callback function */
+  tof8x8Ready = hd_raw_tof8x8::initialise();
+  printInitialisationResult("8x8 ToF", tof8x8Ready);
 
-// Tasks for reading sensors 
-Task tRead_ultrasonic(US_READ_TASK_PERIOD,       US_READ_TASK_NUM_EXECUTE,        &read_ultrasonic);
-Task tRead_infrared(IR_READ_TASK_PERIOD,         IR_READ_TASK_NUM_EXECUTE,        &read_infrared);
-Task tRead_colour(COLOUR_READ_TASK_PERIOD,       COLOUR_READ_TASK_NUM_EXECUTE,    &read_colour);
-Task tSensor_average(SENSOR_AVERAGE_PERIOD,      SENSOR_AVERAGE_NUM_EXECUTE,      &sensor_average);
+  hd_raw_ultrasonic::initialise();
+  printInitialisationResult("ultrasonic sensors", true);
 
-// Task to set the motor speeds and direction
-// Task tSet_motor(SET_MOTOR_TASK_PERIOD,           SET_MOTOR_TASK_NUM_EXECUTE,      &set_motor);
+  xyReady = hd_raw_xy::initialise();
+  printInitialisationResult("XY optical-flow sensor", xyReady);
 
-// Tasks to scan for weights and collection upon detection
-Task tWeight_scan(WEIGHT_SCAN_TASK_PERIOD,       WEIGHT_SCAN_TASK_NUM_EXECUTE,    &weight_scan);
-Task tCollect_weight(COLLECT_WEIGHT_TASK_PERIOD, COLLECT_WEIGHT_TASK_NUM_EXECUTE, &collect_weight);
+  limitSwitchReady = hd_raw_limitSwitch::initialise();
+  printInitialisationResult("limit switch", limitSwitchReady);
 
-// Tasks to search for bases and unload weights
-Task tReturn_to_base(RETURN_TO_BASE_TASK_PERIOD, RETURN_TO_BASE_TASK_NUM_EXECUTE, &return_to_base);
-Task tDetect_base(DETECT_BASE_TASK_PERIOD,       DETECT_BASE_TASK_NUM_EXECUTE,    &detect_base);
-Task tUnload_weights(UNLOAD_WEIGHTS_TASK_PERIOD, UNLOAD_WEIGHTS_TASK_NUM_EXECUTE, &unload_weights);
+  inductiveSensorInitialise();
+  printInitialisationResult("inductive proximity sensor", true);
 
-// Tasks to check the 'watchdog' timer (These will need to be added in)
-//Task tCheck_watchdog(CHECK_WATCHDOG_TASK_PERIOD, CHECK_WATCHDOG_TASK_NUM_EXECUTE, &check_watchdog);
-//Task tVictory_dance(VICTORY_DANCE_TASK_PERIOD,   VICTORY_DANCE_TASK_NUM_EXECUTE,  &victory_dance);
-Scheduler taskManager;
+  filter_weightDetect::resetRangeDetections();
+  printInitialisationResult("ToF weight/wall filter", true);
 
-// Function Definitions
-void pin_init();
-void robot_init();
-void task_init();
+  // filter_positionData is not initialised yet because its files are empty.
+  // hd_raw_encoder is not initialised yet because its files are empty.
+}
 
+void testServoArm() {
+  servoArmReady = hd_move_servoArm::initialise();
+  printInitialisationResult("servo arm", servoArmReady);
 
-// put your setup code here, to run once:
-void setup()
-{
-    Serial.begin(BAUD_RATE);
+  if (!servoArmReady) {
+    return;
+  }
 
-    // Enable CPU-board IO power first.
-    pin_init();
+  Serial.println("[TEST] Sweeping servo arm from 40 to 170 degrees");
+  hd_move_servoArm::setAngle(40);
+  delay(500);
 
-    // Give external hardware some time to power up.
-    delay(500);
+  for (int angle = 40; angle <= 170; angle += 5) {
+    hd_move_servoArm::setAngle(angle);
+    delay(50);
+  }
 
-    Wire.begin();
+  for (int angle = 170; angle >= 40; angle -= 5) {
+    hd_move_servoArm::setAngle(angle);
+    delay(50);
+  }
 
-    // --------------------------------------------------------
-    // SENSOR INITIALISATION
-    // --------------------------------------------------------
+  hd_move_servoArm::setAngle(hd_move_servoArm::kInitialAngleDegrees);
+  Serial.println("[TEST] Servo arm returned to 90 degrees");
+}
 
-    imu_init();
+void initialiseSmartServos() {
+  smartServoInitialise();
 
-    // --------------------------------------------------------
-    // TEMPORARY SERVO TEST
-    // --------------------------------------------------------
+  const bool servo1Ready = smartServoIsReady(1);
+  const bool servo4Ready = smartServoIsReady(4);
+  printInitialisationResult("smart servo 1", servo1Ready);
+  printInitialisationResult("smart servo 4", servo4Ready);
 
-    delay(500);
+  if (servo1Ready) {
+    setServoAngle(1, 0.0f);
     smartServoPrintStatus(1);
+  }
 
+  if (servo4Ready) {
+    setServoAngle(4, 0.0f);
     smartServoPrintStatus(4);
+  }
 
-    setServoAngle(1, 0);
-    setServoAngle(4, 0);
-
-    smartServoPrintStatus(1);
-
-    smartServoPrintStatus(4);
+  // hd_move_motors is not initialised yet because its public header is empty
+  // and its source does not currently contain motor-control code.
 }
 
-// Initialise the pins as inputs and outputs (otherwise, they won't work) 
-// Set as high or low
-void pin_init(){
-    
-    Serial.println("Pins have been initialised \n"); 
+void printTofReadings() {
+  hd_raw_tof::Readings readings;
+  hd_raw_tof::readAll(readings);
+  filter_weightDetect::updateRangeDetections(readings);
 
-    pinMode(IO_POWER, OUTPUT);              //Pin 49 is used to enable IO power
-    digitalWrite(IO_POWER, 1);              //Enable IO power on main CPU board
+  Serial.print("ToF: ");
+  for (uint8_t sensor = 0; sensor < hd_raw_tof::kSensorCount; ++sensor) {
+    Serial.print(sensor);
+    Serial.print('=');
+
+    if (readings[sensor].valid) {
+      Serial.print(readings[sensor].distanceMm);
+      Serial.print("mm");
+    } else if (readings[sensor].timedOut) {
+      Serial.print("TIMEOUT");
+    } else {
+      Serial.print("INVALID");
+    }
+
+    if (sensor + 1 < hd_raw_tof::kSensorCount) {
+      Serial.print("  ");
+    }
+  }
+  Serial.println();
+
+  filter_weightDetect::printRangeDetections();
 }
 
-// Set default robot state
-void robot_init() {
-    Serial.println("Robot is ready \n");
+void printTof8x8Reading() {
+  if (!tof8x8Ready) {
+    Serial.println("8x8 ToF: NOT INITIALISED");
+    return;
+  }
+
+  hd_raw_tof8x8::Frame frame;
+  if (!hd_raw_tof8x8::readFrame(frame)) {
+    Serial.println("8x8 ToF: READ FAILED");
+    return;
+  }
+
+  constexpr size_t kCentrePoint =
+      (hd_raw_tof8x8::kGridSize / 2) * hd_raw_tof8x8::kGridSize +
+      (hd_raw_tof8x8::kGridSize / 2);
+  Serial.print("8x8 ToF centre: ");
+  Serial.print(frame[kCentrePoint]);
+  Serial.println("mm");
 }
 
-// Initialise the tasks for the scheduler
-void task_init() {  
-  // This is a class/library function. Initialise the task scheduler
-  taskManager.init();     
- 
-  // Add tasks to the scheduler
-  taskManager.addTask(tRead_ultrasonic);   //reading ultrasonic 
-  taskManager.addTask(tRead_infrared);
-  taskManager.addTask(tRead_colour);
-  taskManager.addTask(tSensor_average);
-  // taskManager.addTask(tSet_motor); 
-  taskManager.addTask(tWeight_scan);
-  taskManager.addTask(tCollect_weight);
-  taskManager.addTask(tReturn_to_base);
-  taskManager.addTask(tDetect_base);
-  taskManager.addTask(tUnload_weights);
+void printUltrasonicReadings() {
+  hd_raw_ultrasonic::Readings readings;
+  hd_raw_ultrasonic::readAll(readings);
 
-  //taskManager.addTask(tCheck_watchdog);
-  //taskManager.addTask(tVictory_dance);      
+  Serial.print("Ultrasonic: ");
+  for (uint8_t sensor = 0;
+       sensor < hd_raw_ultrasonic::kSensorCount;
+       ++sensor) {
+    Serial.print(sensor == 0 ? "A=" : "B=");
+    if (readings[sensor].valid) {
+      Serial.print(readings[sensor].distanceCm);
+      Serial.print("cm");
+    } else {
+      Serial.print("TIMEOUT");
+    }
 
-  //enable the tasks
-  tRead_ultrasonic.enable();
-  tRead_infrared.enable();
-  tRead_colour.enable();
-  tSensor_average.enable();
-  // tSet_motor.enable();
-  tWeight_scan.enable();
-  tCollect_weight.enable();
-  tReturn_to_base.enable();
-  tDetect_base.enable();
-  tUnload_weights.enable();
- //tCheck_watchdog.enable();
- //tVictory_dance.enable();
-
- Serial.println("Tasks have been initialised \n");
+    if (sensor + 1 < hd_raw_ultrasonic::kSensorCount) {
+      Serial.print("  ");
+    }
+  }
+  Serial.println();
 }
 
+void printDigitalSensorReadings() {
+  hd_raw_limitSwitch::Reading limitReading;
+  const bool limitRead =
+      limitSwitchReady && hd_raw_limitSwitch::read(limitReading);
+
+  Serial.print("Limit switch: ");
+  Serial.print(limitRead ? (limitReading.pressed ? "PRESSED" : "OPEN")
+                         : "READ FAILED");
+  Serial.print("  Inductive: ");
+  Serial.print(inductiveSensorDetected() ? "DETECTED" : "CLEAR");
+  Serial.print(" (raw=");
+  Serial.print(inductiveSensorRaw());
+  Serial.println(')');
+}
+
+void printXyReading() {
+  hd_raw_xy::MotionReading reading;
+  if (!xyReady || !hd_raw_xy::readMotion(reading)) {
+    Serial.println("XY optical flow: READ FAILED");
+    return;
+  }
+
+  Serial.print("XY optical flow: dx=");
+  Serial.print(reading.deltaXCounts);
+  Serial.print(" dy=");
+  Serial.println(reading.deltaYCounts);
+}
+
+void reportImplementedHardware() {
+  Serial.println("----------------------------------------");
+  printTofReadings();
+  printTof8x8Reading();
+  printUltrasonicReadings();
+  printDigitalSensorReadings();
+  printXyReading();
+  Serial.print("Servo arm commanded angle: ");
+  Serial.print(hd_move_servoArm::getCommandedAngle());
+  Serial.println(" degrees");
+}
+
+}  // namespace
+
+void setup() {
+  Serial.begin(kBaudRate);
+
+  const uint32_t serialWaitStartedAt = millis();
+  while (!Serial && millis() - serialWaitStartedAt < kSerialWaitMs) {
+  }
+
+  Serial.println();
+  Serial.println("Robot firmware integration check");
+  Serial.println("========================================");
+
+  initialiseIoPower();
+  Wire.begin();
+  initialiseSensors();
+  testServoArm();
+  initialiseSmartServos();
+
+  // The task scheduler remains disabled until its sensor, navigation,
+  // collection, unloading, watchdog, and motor callbacks are implemented.
+  // task_init();
+
+  Serial.println("========================================");
+  Serial.println("Initialisation complete; starting live readings");
+}
 
 void loop() {
-    //smartServoUpdate();
-    // taskManager.execute();    //execute the scheduler
-    //range_tof_test();
-    //test_8x8();
-    //motors_test_forward_back();
-    imu_test();
+  smartServoUpdate();
 
-    //optical_flow_test();
+  const uint32_t now = millis();
+  if (now - lastReportMs < kReportPeriodMs) {
+    return;
+  }
+
+  lastReportMs = now;
+  reportImplementedHardware();
+
+  // taskManager.execute();  // Enable when all scheduled callbacks exist.
 }
