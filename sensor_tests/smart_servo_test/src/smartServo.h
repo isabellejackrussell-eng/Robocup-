@@ -6,7 +6,7 @@
 // SMART SERVO PUBLIC INTERFACE
 // ============================================================
 
-// Starts Serial2, checks servos 1 and 4, and enables torque.
+// Starts Serial7, checks servos 1 and 4, and enables torque.
 //
 // Call once from setup(), after IO power has been enabled.
 void smartServoInitialise();
