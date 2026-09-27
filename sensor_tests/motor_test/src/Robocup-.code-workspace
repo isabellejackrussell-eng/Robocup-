@@ -1,0 +1,32 @@
+{
+	"folders": [
+		{
+			"path": "../../.."
+		},
+		{
+			"name": "ultrasonic_test",
+			"path": "../../ultrasonic_test"
+		},
+		{
+			"name": "motor_test",
+			"path": ".."
+		},
+		{
+			"name": "motors",
+			"path": "../../motors"
+		},
+		{
+			"name": "bluetooth_test",
+			"path": "../../bluetooth_test"
+		},
+		{
+			"name": "bluetooth_sensor",
+			"path": "../../bluetooth_sensor"
+		},
+		{
+			"name": "tof_8x8",
+			"path": "../../tof_8x8"
+		}
+	],
+	"settings": {}
+}
