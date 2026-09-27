@@ -4,12 +4,20 @@
 			"path": "../../.."
 		},
 		{
-			"name": "encoder",
-			"path": "../../encoder"
-		},
-		{
 			"name": "tof_8x8",
 			"path": ".."
+		},
+		{
+			"name": "bluetooth_sensor",
+			"path": "../../bluetooth_sensor"
+		},
+		{
+			"name": "expander_test",
+			"path": "../../expander_test"
+		},
+		{
+			"name": "smart_servo_test",
+			"path": "../../smart_servo_test"
 		}
 	],
 	"settings": {}

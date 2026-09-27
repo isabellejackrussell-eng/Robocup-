@@ -1,4 +1,5 @@
 #include "tof.h"
+#include "object_identification.h"
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -32,11 +33,7 @@ static const bool sensorIsL0[RANGE_TOF_COUNT] = {
     false,  // Sensor 0 = L1
     false,  // Sensor 1 = L1
     false,  // Sensor 2 = L1
-    true,   // Sensor 3 = L0
-    true,   // Sensor 4 = L0
-    true,   // Sensor 5 = L0
-    true,   // Sensor 6 = L0
-    true    // Sensor 7 = L0
+    true    // Sensor 3 = L0
 };
 
 
@@ -313,11 +310,15 @@ void setup()
     {
         Serial.println("[TOF] One or more sensors failed to initialise");
     }
+
+    object_identification_reset();
 }
 
 void loop()
 {
     range_tof_poll();
     range_tof_print_readings();
+    object_identification_update();
+    object_identification_print();
     delay(TOF_TEST_PRINT_MS);
 }

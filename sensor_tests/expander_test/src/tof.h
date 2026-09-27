@@ -7,8 +7,8 @@
 // CONFIGURATION
 // ============================================================
 
-// Number of VL53L1X range sensors
-#define RANGE_TOF_COUNT 8
+// Two vertical sets of two range sensors.
+#define RANGE_TOF_COUNT 4
 
 // SX1509 I2C address — all 8 sensors on the 505_TOF_Expander board
 #define SX1509_I2C_ADDRESS 0x71
@@ -18,13 +18,13 @@
 
 // SX1509 pin connected to XSHUT of each VL53L1X
 const uint8_t RANGE_TOF_XSHUT_PINS[RANGE_TOF_COUNT] = {
-    0, 1, 2, 3, 4, 5, 6, 7
+    0, 1, 2, 3
 };
 
 // I2C addresses assigned to the VL53L1X sensors — all 8 must be
 // different from each other and from 0x33 (8x8 array) / 0x71 (expander)
 const uint8_t RANGE_TOF_I2C_ADDRESSES[RANGE_TOF_COUNT] = {
-    0x30, 0x31, 0x32, 0x34, 0x35, 0x36, 0x37, 0x38
+    0x30, 0x31, 0x32, 0x34
 };
 
 // VL53L1X measurement settings
