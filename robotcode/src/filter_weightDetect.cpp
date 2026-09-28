@@ -341,6 +341,13 @@ bool rangeSensorSeesObject(
   return distanceMm > 0 && distanceMm <= kRangeObjectMaximumDistanceMm;
 }
 
+bool distancesMatch(uint16_t firstMm, uint16_t secondMm) {
+  const uint16_t differenceMm = firstMm > secondMm
+      ? firstMm - secondMm
+      : secondMm - firstMm;
+  return differenceMm <= kWallDistanceToleranceMm;
+}
+
 RangeObjectDetection classifyPairedSensors(
     const hd_raw_tof::Readings& readings,
     uint8_t pairIndex) {
@@ -353,8 +360,13 @@ RangeObjectDetection classifyPairedSensors(
     return {topSeen ? RangeObjectType::unknown : RangeObjectType::none, 0};
   }
 
+  const bool sameObjectAtBothHeights =
+      topSeen && distancesMatch(
+          readings[bottomSensor].distanceMm,
+          readings[topSensor].distanceMm);
+
   return {
-      topSeen ? RangeObjectType::wall : RangeObjectType::weight,
+      sameObjectAtBothHeights ? RangeObjectType::wall : RangeObjectType::weight,
       readings[bottomSensor].distanceMm,
   };
 }
@@ -457,6 +469,117 @@ void printRangeDetections() {
     if (detectionIndex + 1 < kRangeDetectionCount) {
       Serial.print("   ");
     }
+  }
+
+  Serial.println();
+}
+
+WeightIdentification identifyWeight(
+    const hd_raw_tof::Readings& readings,
+    const WeightResult& matrixWeight) {
+  constexpr uint8_t kRightPairIndex = 0;
+  constexpr uint8_t kLeftPairIndex = 1;
+
+  // Top sensors from the right and left pairs plus the two existing wall-only
+  // sensors can all confirm that an 8x8 candidate is a tall wall.
+  constexpr uint8_t kTopOrWallSensorIndices[] = {1, 3, 4, 5};
+
+  // updateRangeDetections() supplies the debounced three-sample result used
+  // here. Keep the raw readings only for the top-sensor wall comparison.
+  const RangeObjectDetection rightDetection =
+      getRangeDetection(kRightPairIndex);
+  const RangeObjectDetection leftDetection =
+      getRangeDetection(kLeftPairIndex);
+
+  const bool rightWeight = rightDetection.type == RangeObjectType::weight;
+  const bool leftWeight = leftDetection.type == RangeObjectType::weight;
+
+  bool matrixMatchesWall = false;
+  if (matrixWeight.found) {
+    for (uint8_t sensorIndex : kTopOrWallSensorIndices) {
+      if (rangeSensorSeesObject(readings, sensorIndex) &&
+          distancesMatch(
+              matrixWeight.averageDistanceMm,
+              readings[sensorIndex].distanceMm)) {
+        matrixMatchesWall = true;
+        break;
+      }
+    }
+  }
+
+  const bool centreWeight = matrixWeight.found && !matrixMatchesWall;
+
+  uint32_t distanceSumMm = 0;
+  uint8_t distanceCount = 0;
+
+  if (rightWeight) {
+    distanceSumMm += rightDetection.distanceMm;
+    ++distanceCount;
+  }
+  if (centreWeight) {
+    distanceSumMm += matrixWeight.averageDistanceMm;
+    ++distanceCount;
+  }
+  if (leftWeight) {
+    distanceSumMm += leftDetection.distanceMm;
+    ++distanceCount;
+  }
+
+  const uint16_t combinedDistanceMm = distanceCount > 0
+      ? static_cast<uint16_t>(distanceSumMm / distanceCount)
+      : static_cast<uint16_t>(0);
+
+  WeightIdentification identification = {
+      distanceCount > 0 ? WeightState::found : WeightState::notFound,
+      combinedDistanceMm,
+      rightWeight
+          ? rightDetection.distanceMm
+          : static_cast<uint16_t>(0),
+      centreWeight
+          ? matrixWeight.averageDistanceMm
+          : static_cast<uint16_t>(0),
+      leftWeight
+          ? leftDetection.distanceMm
+          : static_cast<uint16_t>(0),
+      centreWeight ? matrixWeight.averageColumn : -1.0f,
+      rightWeight,
+      centreWeight,
+      leftWeight,
+  };
+
+  return identification;
+}
+
+bool weightFound(const WeightIdentification& identification) {
+  return identification.state == WeightState::found;
+}
+
+void printWeightIdentification(const WeightIdentification& identification) {
+  if (!weightFound(identification)) {
+    Serial.println("Weight identification: NOT FOUND");
+    return;
+  }
+
+  Serial.print("Weight identification: FOUND at ");
+  Serial.print(identification.distanceMm);
+  Serial.print("mm | seen by:");
+
+  if (identification.seenByRightTof) {
+    Serial.print(" RIGHT(");
+    Serial.print(identification.rightDistanceMm);
+    Serial.print("mm)");
+  }
+  if (identification.seenBy8x8) {
+    Serial.print(" CENTRE(column=");
+    Serial.print(identification.column, 1);
+    Serial.print(", distance=");
+    Serial.print(identification.centreDistanceMm);
+    Serial.print("mm)");
+  }
+  if (identification.seenByLeftTof) {
+    Serial.print(" LEFT(");
+    Serial.print(identification.leftDistanceMm);
+    Serial.print("mm)");
   }
 
   Serial.println();

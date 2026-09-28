@@ -5,16 +5,20 @@
 #include "hd_move_motors.h"
 #include "hd_move_servoArm.h"
 #include "hd_move_smartServos.h"
+#include "hd_raw_bluetooth.h"
+#include "hd_raw_imu.h"
 #include "hd_raw_inductiveProximity.h"
 #include "hd_raw_limitSwitch.h"
 #include "hd_raw_tof.h"
 #include "hd_raw_tof8x8.h"
 #include "hd_raw_ultrasonic.h"
 #include "hd_raw_xy.h"
+#include "logic_weightCollection.h"
+#include "logic_weightHunting.h"
+#include "logic_weightHandling.h"
 
-// These modules are intentionally disabled until they have implementations.
-// #include "filter_positionData.h"
-// #include "hd_raw_encoder.h"
+// Encoder collection is not started here because its test pins 2/3 and 4/5
+// currently conflict with the integrated ultrasonic sensor pins.
 
 namespace {
 
@@ -22,12 +26,29 @@ constexpr uint8_t kIoPowerPin = 49;
 constexpr uint32_t kBaudRate = 115200;
 constexpr uint32_t kSerialWaitMs = 3000;
 constexpr uint32_t kReportPeriodMs = 500;
+constexpr uint32_t kWeightControlPeriodMs = 100;
+constexpr size_t kWeightCalibrationFrameCount = 5;
 
 bool tof8x8Ready = false;
 bool xyReady = false;
+bool imuReady = false;
 bool limitSwitchReady = false;
 bool servoArmReady = false;
+bool weightDetectorReady = false;
+bool weightHuntingReady = false;
 uint32_t lastReportMs = 0;
+uint32_t lastWeightControlMs = 0;
+filter_weightDetect::WeightIdentification latestWeight = {
+    filter_weightDetect::WeightState::notFound,
+    0,
+    0,
+    0,
+    0,
+    -1.0f,
+    false,
+    false,
+    false,
+};
 
 void printInitialisationResult(const char* device, bool success) {
   Serial.print("[INIT] ");
@@ -43,7 +64,43 @@ void initialiseIoPower() {
   printInitialisationResult("CPU-board I/O power", true);
 }
 
+void initialiseBluetooth() {
+  const bool bluetoothReady = hd_raw_bluetooth::initialise();
+  printInitialisationResult("Bluetooth UART", bluetoothReady);
+
+  if (bluetoothReady) {
+    hd_raw_bluetooth::sendLine("Robot Bluetooth ready");
+  }
+}
+
+bool calibrateWeightDetector() {
+  if (!tof8x8Ready) {
+    return false;
+  }
+
+  Serial.println(
+      "[CALIBRATION] Keep weights clear of the 8x8 sensor for 2 seconds");
+  delay(2000);
+
+  hd_raw_tof8x8::Frame frames[kWeightCalibrationFrameCount];
+  for (size_t frameIndex = 0;
+       frameIndex < kWeightCalibrationFrameCount;
+       ++frameIndex) {
+    if (!hd_raw_tof8x8::readFrame(frames[frameIndex])) {
+      Serial.println("[CALIBRATION] 8x8 frame read failed");
+      return false;
+    }
+    delay(50);
+  }
+
+  return filter_weightDetect::calibrateBackgroundAveraged(
+      frames, kWeightCalibrationFrameCount);
+}
+
 void initialiseSensors() {
+  imuReady = hd_raw_imu::initialise();
+  printInitialisationResult("BNO055 IMU", imuReady);
+
   const bool tofReady = hd_raw_tof::initialise();
   printInitialisationResult("six ToF sensors", tofReady);
 
@@ -75,8 +132,12 @@ void initialiseSensors() {
   filter_weightDetect::resetRangeDetections();
   printInitialisationResult("ToF weight/wall filter", true);
 
-  // filter_positionData is not initialised yet because its files are empty.
-  // hd_raw_encoder is not initialised yet because its files are empty.
+  weightDetectorReady = calibrateWeightDetector();
+  printInitialisationResult(
+      "8x8 empty-scene weight calibration", weightDetectorReady);
+
+  // filter_positionData::collect() is ready to use once the encoder pin
+  // conflict is resolved and hd_raw_encoder::initialise() can be called.
 }
 
 void testServoArm() {
@@ -131,6 +192,41 @@ void testMotors() {
   Serial.println("[TEST] Running motor forward/reverse test");
   motors_test_forward_back();
   Serial.println("[TEST] Motor test complete; motors stopped");
+}
+
+void updateWeightHunting(uint32_t nowMs) {
+  if (!weightHuntingReady || !weightDetectorReady ||
+      nowMs - lastWeightControlMs < kWeightControlPeriodMs) {
+    return;
+  }
+  lastWeightControlMs = nowMs;
+
+  hd_raw_tof::Readings readings;
+  hd_raw_tof::readAll(readings);
+  filter_weightDetect::updateRangeDetections(readings);
+
+  hd_raw_tof8x8::Frame frame;
+  if (!hd_raw_tof8x8::readFrame(frame)) {
+    latestWeight = {
+        filter_weightDetect::WeightState::notFound,
+        0,
+        0,
+        0,
+        0,
+        -1.0f,
+        false,
+        false,
+        false,
+    };
+    logic_weightHunting::stop();
+    return;
+  }
+
+  const filter_weightDetect::WeightResult matrixWeight =
+      filter_weightDetect::detectWeight(frame, false);
+  latestWeight =
+      filter_weightDetect::identifyWeight(readings, matrixWeight);
+  logic_weightHunting::update(latestWeight, nowMs);
 }
 
 void printTofReadings() {
@@ -208,12 +304,13 @@ void printDigitalSensorReadings() {
   hd_raw_limitSwitch::Reading limitReading;
   const bool limitRead =
       limitSwitchReady && hd_raw_limitSwitch::read(limitReading);
+  const bool metalDetected = inductiveSensorDetected();
 
   Serial.print("Limit switch: ");
   Serial.print(limitRead ? (limitReading.pressed ? "PRESSED" : "OPEN")
                          : "READ FAILED");
-  Serial.print("  Inductive: ");
-  Serial.print(inductiveSensorDetected() ? "DETECTED" : "CLEAR");
+  Serial.print("  Metal detected: ");
+  Serial.print(metalDetected ? "YES" : "NO");
   Serial.print(" (raw=");
   Serial.print(inductiveSensorRaw());
   Serial.println(')');
@@ -232,6 +329,35 @@ void printXyReading() {
   Serial.println(reading.deltaYCounts);
 }
 
+void printImuReading() {
+  hd_raw_imu::Reading reading;
+  if (!imuReady || !hd_raw_imu::read(reading)) {
+    Serial.println("IMU: READ FAILED");
+    return;
+  }
+
+  Serial.print("IMU: heading=");
+  Serial.print(reading.headingDegrees, 1);
+  Serial.print(" roll=");
+  Serial.print(reading.rollDegrees, 1);
+  Serial.print(" pitch=");
+  Serial.print(reading.pitchDegrees, 1);
+  Serial.print(" deg  linear acceleration=");
+  Serial.print(reading.linearAccelerationMps2.x, 2);
+  Serial.print(',');
+  Serial.print(reading.linearAccelerationMps2.y, 2);
+  Serial.print(',');
+  Serial.print(reading.linearAccelerationMps2.z, 2);
+  Serial.print(" m/s^2  calibration=");
+  Serial.print(reading.calibration.system);
+  Serial.print('/');
+  Serial.print(reading.calibration.gyroscope);
+  Serial.print('/');
+  Serial.print(reading.calibration.accelerometer);
+  Serial.print('/');
+  Serial.println(reading.calibration.magnetometer);
+}
+
 void reportImplementedHardware() {
   Serial.println("----------------------------------------");
   printTofReadings();
@@ -239,6 +365,10 @@ void reportImplementedHardware() {
   printUltrasonicReadings();
   printDigitalSensorReadings();
   printXyReading();
+  printImuReading();
+  filter_weightDetect::printWeightIdentification(latestWeight);
+  logic_weightHunting::printStatus();
+  logic_weightCollection::printStatus();
   Serial.print("Servo arm commanded angle: ");
   Serial.print(hd_move_servoArm::getCommandedAngle());
   Serial.println(" degrees");
@@ -258,11 +388,19 @@ void setup() {
   Serial.println("========================================");
 
   initialiseIoPower();
+  initialiseBluetooth();
   Wire.begin();
   initialiseSensors();
   testServoArm();
   initialiseSmartServos();
+  printInitialisationResult(
+      "weight handling logic", logic_weightHandling::initialise());
   testMotors();
+  weightHuntingReady = logic_weightHunting::initialise();
+  printInitialisationResult(
+      "weight hunting logic", weightHuntingReady);
+  printInitialisationResult(
+      "weight collection logic", logic_weightCollection::initialise());
 
   // The task scheduler remains disabled until its sensor, navigation,
   // collection, unloading, watchdog, and motor callbacks are implemented.
@@ -274,8 +412,11 @@ void setup() {
 
 void loop() {
   smartServoUpdate();
+  logic_weightHandling::update();
 
   const uint32_t now = millis();
+  updateWeightHunting(now);
+  logic_weightCollection::update(now);
   if (now - lastReportMs < kReportPeriodMs) {
     return;
   }

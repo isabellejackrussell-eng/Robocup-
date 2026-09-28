@@ -53,6 +53,11 @@ struct RangeObjectDetection {
   uint16_t distanceMm;
 };
 
+// Measurements within this distance are treated as the same object. This is
+// used to distinguish a tall wall seen by both sensor heights from a low
+// weight seen only by a bottom sensor or the 8x8 sensor.
+constexpr uint16_t kWallDistanceToleranceMm = 100;
+
 // Clears the three-sample debounce/filter state.
 void resetRangeDetections();
 
@@ -63,6 +68,48 @@ void updateRangeDetections(const hd_raw_tof::Readings& readings);
 RangeObjectDetection getRangeDetection(uint8_t detectionIndex);
 const char* rangeObjectTypeName(RangeObjectType type);
 void printRangeDetections();
+
+// -----------------------------------------------------------------------------
+// Combined right / centre / left weight identification
+// -----------------------------------------------------------------------------
+
+enum class WeightState : uint8_t {
+  notFound,
+  found,
+};
+
+struct WeightIdentification {
+  WeightState state;
+
+  // Average distance across every sensor region that identified the weight.
+  uint16_t distanceMm;
+
+  // Individual distances are retained for movement logic. A value of zero
+  // means that sensor region did not identify a weight.
+  uint16_t rightDistanceMm;
+  uint16_t centreDistanceMm;
+  uint16_t leftDistanceMm;
+
+  // 8x8 average column, from 0 (left side of its image) to 7 (right side).
+  // Set to -1 when the 8x8 sensor did not identify the weight.
+  float column;
+
+  // More than one of these can be true for the same wide/overlapping target.
+  bool seenByRightTof;
+  bool seenBy8x8;
+  bool seenByLeftTof;
+};
+
+// Fuses the current single-point ToF readings with the result from the existing
+// 8x8 weight detector. Set 0 is the right pair, set 1 is the left pair, and the
+// 8x8 sensor is the centre. A centre candidate matching a top/wall ToF distance
+// is rejected as a wall.
+WeightIdentification identifyWeight(
+    const hd_raw_tof::Readings& readings,
+    const WeightResult& matrixWeight);
+
+bool weightFound(const WeightIdentification& identification);
+void printWeightIdentification(const WeightIdentification& identification);
 
 }  // namespace filter_weightDetect
 

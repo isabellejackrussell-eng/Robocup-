@@ -1,7 +1,8 @@
 #include "hd_raw_inductiveProximity.h"
 
 static constexpr uint8_t INDUCTIVE_SENSOR_PIN = A6;
-static constexpr bool DETECTED_WHEN_LOW = false;
+// This sensor drives the input HIGH when its metal-detection LED is on.
+static constexpr bool DETECTED_WHEN_HIGH = true;
 
 void inductiveSensorInitialise(){
     pinMode(INDUCTIVE_SENSOR_PIN, INPUT);
@@ -14,11 +15,11 @@ void inductiveSensorInitialise(){
 bool inductiveSensorDetected(){
     int state = digitalRead(INDUCTIVE_SENSOR_PIN);
 
-    if (DETECTED_WHEN_LOW){
-        return state == LOW;
+    if (DETECTED_WHEN_HIGH){
+        return state == HIGH;
     }
 
-    return state == HIGH;
+    return state == LOW;
 }
 
 int inductiveSensorRaw(){
