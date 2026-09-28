@@ -6,8 +6,9 @@ known-working hardware examples.
 
 ## Safety first
 
-The default PlatformIO environment is `sensor_test`. It reads and reports sensors
-but does not initialise the motors or claw.
+The default PlatformIO environment is `sensor_test`. During startup it runs a
+two-second forward/reverse motor test, so raise the robot before flashing it. It
+then reads and reports sensors continuously. It does not initialise the claw.
 
 The autonomous modes (`nav_motion_test`, `full_integration_test`, and
 `competition`) boot in `IDLE`. Send `g` over USB Serial or Bluetooth before they
@@ -123,4 +124,3 @@ invalid reading rather than treating a missing sensor as zero distance.
 
 Sorting, storage, deposit, colour-home confirmation, advanced mapping, and other
 mechanisms listed under “Do Not Implement Yet” remain intentionally unimplemented.
-

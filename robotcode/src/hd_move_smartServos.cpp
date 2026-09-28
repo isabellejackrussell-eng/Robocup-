@@ -42,7 +42,7 @@ static constexpr uint8_t MOVE_TIME = 70;
 // HERKULEX OBJECTS
 // ============================================================
 
-static HerkulexServoBus servoBus(Serial2);
+static HerkulexServoBus servoBus(Serial7);
 
 static HerkulexServo servo1(servoBus, SERVO_1_ID);
 static HerkulexServo servo4(servoBus, SERVO_4_ID);
@@ -158,7 +158,7 @@ void smartServoInitialise() {
     Serial.println("==============================");
 
     // Start hardware UART connected to the Smart Servo board.
-    Serial2.begin(SERVO_BAUD);
+    Serial7.begin(SERVO_BAUD);
 
     // Give the servos time to power up.
     delay(500);

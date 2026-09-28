@@ -2,6 +2,7 @@
 #include <Wire.h>
 
 #include "filter_weightDetect.h"
+#include "hd_move_motors.h"
 #include "hd_move_servoArm.h"
 #include "hd_move_smartServos.h"
 #include "hd_raw_inductiveProximity.h"
@@ -13,7 +14,6 @@
 
 // These modules are intentionally disabled until they have implementations.
 // #include "filter_positionData.h"
-// #include "hd_move_motors.h"
 // #include "hd_raw_encoder.h"
 
 namespace {
@@ -122,9 +122,15 @@ void initialiseSmartServos() {
     setServoAngle(4, 0.0f);
     smartServoPrintStatus(4);
   }
+}
 
-  // hd_move_motors is not initialised yet because its public header is empty
-  // and its source does not currently contain motor-control code.
+void testMotors() {
+  motors_init();
+  printInitialisationResult("drive motors", motors_is_initialised());
+
+  Serial.println("[TEST] Running motor forward/reverse test");
+  motors_test_forward_back();
+  Serial.println("[TEST] Motor test complete; motors stopped");
 }
 
 void printTofReadings() {
@@ -256,6 +262,7 @@ void setup() {
   initialiseSensors();
   testServoArm();
   initialiseSmartServos();
+  testMotors();
 
   // The task scheduler remains disabled until its sensor, navigation,
   // collection, unloading, watchdog, and motor callbacks are implemented.
