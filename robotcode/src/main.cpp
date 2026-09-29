@@ -4,6 +4,7 @@
 #include "filter_weightDetect.h"
 #include "hd_move_motors.h"
 #include "hd_move_servoArm.h"
+#include "hd_raw_imu.h"
 #include "hd_raw_tof.h"
 #include "hd_raw_tof8x8.h"
 
@@ -13,7 +14,6 @@ constexpr uint8_t kIoPowerPin = 49;
 constexpr uint32_t kBaudRate = 115200;
 constexpr uint32_t kMatrixConnectTimeoutMs = 3000;
 constexpr uint32_t kMatrixRetryPeriodMs = 100;
-constexpr size_t kCalibrationFrameCount = 10;
 constexpr uint32_t kSensorPeriodMs = 100;
 constexpr uint32_t kStatusPeriodMs = 500;
 
@@ -30,9 +30,17 @@ constexpr uint32_t kWeavePeriodMs = 5000;
 constexpr float kTargetColumn = 3.5f;
 constexpr float kColumnSteeringGain = 45.0f;
 constexpr int kMaximumApproachCorrection = 100;
-constexpr uint16_t kWallTurnDistanceMm = 200;
-constexpr int kWallTurnLeftPower = 425;
-constexpr int kWallTurnRightPower = 250;
+// Pair 0 is on the right (bottom 0, top 1); pair 1 is on the left
+// (bottom 2, top 3). Wall avoidance deliberately uses only the top sensors.
+constexpr uint8_t kTopRightTofIndex = 1;
+constexpr uint8_t kTopLeftTofIndex = 3;
+constexpr uint16_t kTopWallThresholdMm = 200;
+constexpr float kSingleWallTurnDegrees = 20.0f;
+constexpr float kBothWallsTurnDegrees = 180.0f;
+constexpr int kWallPointTurnPower = 325;
+constexpr uint32_t kWallStopTimeMs = 250;
+constexpr uint32_t kFallbackTurnMsPerDegree = 12;
+constexpr uint32_t kWallTurnTimeoutExtraMs = 1500;
 
 constexpr uint8_t kDetectionConfirmFrames = 3;
 constexpr uint8_t kLostWeightFrames = 5;
@@ -43,19 +51,22 @@ constexpr uint8_t kClearConfirmFrames = 5;
 // collection distance without risking a failure to trigger at 41-43 mm.
 constexpr uint16_t kCollectionDistanceMm = 45;
 
-constexpr int kArmDownAngleDegrees = 40;
-constexpr int kArmUpAngleDegrees = 190;
+constexpr int kArmUpAngleDegrees = 40;
+constexpr int kArmDownAngleDegrees = 200;
 constexpr int kArmStepDegrees = 2;
 constexpr uint32_t kArmStepPeriodMs = 20;
-constexpr uint32_t kArmHoldTimeMs = 750;
+constexpr uint32_t kArmCatchHoldTimeMs = 750;
+constexpr uint32_t kArmGuardPeriodMs = 500;
 
 enum class RobotState : uint8_t {
   searching,
   approaching,
   sweepingArmUp,
-  holdingArmUp,
+  holdingArmDown,
   sweepingArmDown,
   waitingForWeightToClear,
+  stoppingForWall,
+  turningFromWall,
   emergencyStopped,
 };
 
@@ -70,15 +81,28 @@ filter_weightDetect::WeightResult latestWeight = {};
 bool latestFrameValid = false;
 bool rangeTofsAvailable = false;
 bool closeWallAhead = false;
+bool topLeftWallClose = false;
+bool topRightWallClose = false;
+uint16_t topLeftDistanceMm = 0;
+uint16_t topRightDistanceMm = 0;
+bool imuAvailable = false;
+bool wallTurnUsesImu = false;
+bool haveWallTurnHeading = false;
+float wallTurnTargetDegrees = 0.0f;
+float wallTurnAccumulatedDegrees = 0.0f;
+float previousWallTurnHeadingDegrees = 0.0f;
+uint32_t wallTurnStartedMs = 0;
+uint32_t lastWallImuMs = 0;
 uint8_t detectionFrames = 0;
 uint8_t lostFrames = 0;
 uint8_t clearFrames = 0;
-int armAngleDegrees = kArmDownAngleDegrees;
+int armAngleDegrees = kArmUpAngleDegrees;
 int commandedLeftPower = 0;
 int commandedRightPower = 0;
 uint32_t lastSensorMs = 0;
 uint32_t lastStatusMs = 0;
 uint32_t lastArmStepMs = 0;
+uint32_t lastArmGuardMs = 0;
 uint32_t stateStartedMs = 0;
 
 const char* sensorSourceName() {
@@ -93,12 +117,16 @@ const char* stateName(RobotState value) {
       return "APPROACHING";
     case RobotState::sweepingArmUp:
       return "SWEEPING ARM UP";
-    case RobotState::holdingArmUp:
-      return "HOLDING ARM UP";
+    case RobotState::holdingArmDown:
+      return "HOLDING ARM DOWN";
     case RobotState::sweepingArmDown:
       return "SWEEPING ARM DOWN";
     case RobotState::waitingForWeightToClear:
       return "WAITING FOR WEIGHT TO CLEAR";
+    case RobotState::stoppingForWall:
+      return "STOPPING FOR WALL";
+    case RobotState::turningFromWall:
+      return "TURNING RIGHT FROM WALL";
     case RobotState::emergencyStopped:
       return "EMERGENCY STOPPED";
     default:
@@ -170,27 +198,6 @@ void driveTowardsWeight(const filter_weightDetect::WeightResult& weight) {
   commandMotors(leftPower, rightPower);
 }
 
-bool calibrateEmptyScene() {
-  Serial.println("[CALIBRATION] Keep the 8x8 view empty for three seconds");
-  delay(3000);
-
-  hd_raw_tof8x8::Frame frames[kCalibrationFrameCount];
-  for (size_t frame = 0; frame < kCalibrationFrameCount; ++frame) {
-    if (!hd_raw_tof8x8::readFrame(frames[frame])) {
-      Serial.println("[CALIBRATION] Frame read failed");
-      return false;
-    }
-    delay(50);
-  }
-
-  const bool calibrated = filter_weightDetect::calibrateBackgroundAveraged(
-      frames, kCalibrationFrameCount);
-  Serial.println(calibrated
-      ? "[CALIBRATION] Background ready"
-      : "[CALIBRATION] Background failed");
-  return calibrated;
-}
-
 bool readMatrixWeight() {
   hd_raw_tof8x8::Frame frame;
   if (!hd_raw_tof8x8::readFrame(frame)) {
@@ -207,31 +214,60 @@ bool readMatrixWeight() {
 
 void updateRangeSensorState(const hd_raw_tof::Readings& readings) {
   filter_weightDetect::updateRangeDetections(readings);
-  closeWallAhead = false;
 
-  for (uint8_t detection = 0;
-       detection < filter_weightDetect::kRangeDetectionCount;
-       ++detection) {
-    const filter_weightDetect::RangeObjectDetection object =
-        filter_weightDetect::getRangeDetection(detection);
-    if (object.type == filter_weightDetect::RangeObjectType::wall &&
-        object.distanceMm > 0 &&
-        object.distanceMm <= kWallTurnDistanceMm) {
-      closeWallAhead = true;
-      break;
-    }
+  topRightDistanceMm = readings[kTopRightTofIndex].valid
+      ? readings[kTopRightTofIndex].distanceMm
+      : 0;
+  topLeftDistanceMm = readings[kTopLeftTofIndex].valid
+      ? readings[kTopLeftTofIndex].distanceMm
+      : 0;
+  topRightWallClose =
+      topRightDistanceMm > 0 && topRightDistanceMm < kTopWallThresholdMm;
+  topLeftWallClose =
+      topLeftDistanceMm > 0 && topLeftDistanceMm < kTopWallThresholdMm;
+  closeWallAhead = topLeftWallClose || topRightWallClose;
+}
+
+void applyWeightIdentification(
+    const filter_weightDetect::WeightIdentification& identification) {
+  latestWeight = {};
+  if (!filter_weightDetect::weightFound(identification)) {
+    return;
+  }
+
+  latestWeight.found = true;
+  latestWeight.averageDistanceMm = identification.seenBy8x8
+      ? identification.centreDistanceMm
+      : identification.distanceMm;
+
+  if (identification.seenBy8x8) {
+    latestWeight.averageColumn = identification.column;
+  } else if (identification.seenByRightTof &&
+             identification.seenByLeftTof) {
+    latestWeight.averageColumn = kTargetColumn;
+  } else if (identification.seenByRightTof) {
+    latestWeight.averageColumn = 6.0f;
+  } else {
+    latestWeight.averageColumn = 1.0f;
   }
 }
 
 void readAuxiliaryRangeTofs() {
   if (!rangeTofsAvailable) {
     closeWallAhead = false;
+    topLeftWallClose = false;
+    topRightWallClose = false;
+    topLeftDistanceMm = 0;
+    topRightDistanceMm = 0;
     return;
   }
 
   hd_raw_tof::Readings readings;
   hd_raw_tof::readAll(readings);
   updateRangeSensorState(readings);
+  const filter_weightDetect::WeightIdentification identification =
+      filter_weightDetect::identifyWeight(readings, latestWeight);
+  applyWeightIdentification(identification);
 }
 
 bool readRangeTofWeight() {
@@ -251,25 +287,8 @@ bool readRangeTofWeight() {
     }
   }
 
-  latestWeight = {};
-  if (!filter_weightDetect::weightFound(identification)) {
-    return latestFrameValid;
-  }
-
-  latestWeight.found = true;
-  latestWeight.averageDistanceMm = identification.distanceMm;
-
-  // The individual ToFs are arranged as right and left bottom/top pairs.
-  // Convert their coarse direction into the same 0..7 steering coordinate
-  // used by the 8x8 detector.
-  if (identification.seenByRightTof && identification.seenByLeftTof) {
-    latestWeight.averageColumn = kTargetColumn;
-  } else if (identification.seenByRightTof) {
-    latestWeight.averageColumn = 6.0f;
-  } else {
-    latestWeight.averageColumn = 1.0f;
-  }
-  return true;
+  applyWeightIdentification(identification);
+  return latestFrameValid;
 }
 
 bool readWeight() {
@@ -329,14 +348,14 @@ void startArmCollection() {
   lostFrames = 0;
   clearFrames = 0;
   lastArmStepMs = millis();
-  setState(RobotState::sweepingArmUp);
+  setState(RobotState::sweepingArmDown);
 }
 
 void updateArm(uint32_t nowMs) {
-  if (state == RobotState::holdingArmUp) {
-    if (nowMs - stateStartedMs >= kArmHoldTimeMs) {
+  if (state == RobotState::holdingArmDown) {
+    if (nowMs - stateStartedMs >= kArmCatchHoldTimeMs) {
       lastArmStepMs = nowMs;
-      setState(RobotState::sweepingArmDown);
+      setState(RobotState::sweepingArmUp);
     }
     return;
   }
@@ -347,27 +366,153 @@ void updateArm(uint32_t nowMs) {
   lastArmStepMs = nowMs;
 
   if (state == RobotState::sweepingArmUp) {
-    armAngleDegrees = min(
-        armAngleDegrees + kArmStepDegrees, kArmUpAngleDegrees);
+    armAngleDegrees = max(
+        armAngleDegrees - kArmStepDegrees, kArmUpAngleDegrees);
     hd_move_servoArm::setAngle(armAngleDegrees);
-    if (armAngleDegrees >= kArmUpAngleDegrees) {
-      setState(RobotState::holdingArmUp);
+    if (armAngleDegrees <= kArmUpAngleDegrees) {
+      clearFrames = 0;
+      setState(RobotState::waitingForWeightToClear);
     }
     return;
   }
 
   if (state == RobotState::sweepingArmDown) {
-    armAngleDegrees = max(
-        armAngleDegrees - kArmStepDegrees, kArmDownAngleDegrees);
+    armAngleDegrees = min(
+        armAngleDegrees + kArmStepDegrees, kArmDownAngleDegrees);
     hd_move_servoArm::setAngle(armAngleDegrees);
-    if (armAngleDegrees <= kArmDownAngleDegrees) {
-      clearFrames = 0;
-      setState(RobotState::waitingForWeightToClear);
+    if (armAngleDegrees >= kArmDownAngleDegrees) {
+      setState(RobotState::holdingArmDown);
     }
   }
 }
 
+void ensureArmRaised(uint32_t nowMs) {
+  const bool collecting =
+      state == RobotState::sweepingArmDown ||
+      state == RobotState::holdingArmDown ||
+      state == RobotState::sweepingArmUp;
+  if (collecting ||
+      nowMs - lastArmGuardMs < kArmGuardPeriodMs ||
+      !hd_move_servoArm::isInitialised()) {
+    return;
+  }
+
+  lastArmGuardMs = nowMs;
+  armAngleDegrees = kArmUpAngleDegrees;
+  hd_move_servoArm::setAngle(armAngleDegrees);
+}
+
+float headingChangeDegrees(float currentDegrees, float previousDegrees) {
+  float change = currentDegrees - previousDegrees;
+  while (change > 180.0f) {
+    change -= 360.0f;
+  }
+  while (change < -180.0f) {
+    change += 360.0f;
+  }
+  return fabsf(change);
+}
+
+void beginWallAvoidance() {
+  wallTurnTargetDegrees = topLeftWallClose && topRightWallClose
+      ? kBothWallsTurnDegrees
+      : kSingleWallTurnDegrees;
+  wallTurnAccumulatedDegrees = 0.0f;
+  haveWallTurnHeading = false;
+  wallTurnUsesImu = false;
+  wallTurnStartedMs = 0;
+  lastWallImuMs = 0;
+  stopMotors();
+  setState(RobotState::stoppingForWall);
+
+  Serial.print("[WALL] Top ");
+  if (topLeftWallClose && topRightWallClose) {
+    Serial.print("left and right");
+  } else if (topLeftWallClose) {
+    Serial.print("left");
+  } else {
+    Serial.print("right");
+  }
+  Serial.print(" ToF below 200mm; stopping, then turning right ");
+  Serial.print(wallTurnTargetDegrees, 0);
+  Serial.println(" degrees");
+
+}
+
+void finishWallAvoidance(uint32_t nowMs) {
+  topLeftWallClose = false;
+  topRightWallClose = false;
+  closeWallAhead = false;
+  detectionFrames = 0;
+  lostFrames = 0;
+  lastSensorMs = nowMs;
+  setState(RobotState::searching);
+  commandMotors(kLeftDrivePower, kRightDrivePower);
+  Serial.println("[WALL] Turn complete; continuing forward");
+}
+
+void updateWallAvoidance(uint32_t nowMs) {
+  if (state == RobotState::stoppingForWall) {
+    stopMotors();
+    if (nowMs - stateStartedMs < kWallStopTimeMs) {
+      return;
+    }
+
+    hd_raw_imu::Reading reading;
+    wallTurnUsesImu = imuAvailable && hd_raw_imu::read(reading) && reading.valid;
+    if (wallTurnUsesImu) {
+      previousWallTurnHeadingDegrees = reading.headingDegrees;
+      haveWallTurnHeading = true;
+      lastWallImuMs = nowMs;
+    }
+    wallTurnStartedMs = nowMs;
+    setState(RobotState::turningFromWall);
+    commandMotors(kWallPointTurnPower, -kWallPointTurnPower);
+    return;
+  }
+
+  commandMotors(kWallPointTurnPower, -kWallPointTurnPower);
+
+  if (wallTurnUsesImu &&
+      nowMs - lastWallImuMs >= hd_raw_imu::kRecommendedSampleIntervalMs) {
+    lastWallImuMs = nowMs;
+    hd_raw_imu::Reading reading;
+    if (hd_raw_imu::read(reading) && reading.valid) {
+      if (haveWallTurnHeading) {
+        wallTurnAccumulatedDegrees += headingChangeDegrees(
+            reading.headingDegrees, previousWallTurnHeadingDegrees);
+      }
+      previousWallTurnHeadingDegrees = reading.headingDegrees;
+      haveWallTurnHeading = true;
+    }
+  }
+
+  const uint32_t timedTurnMs = static_cast<uint32_t>(
+      wallTurnTargetDegrees * kFallbackTurnMsPerDegree);
+  const uint32_t turnElapsedMs = nowMs - wallTurnStartedMs;
+  const bool angleReached =
+      wallTurnUsesImu &&
+      wallTurnAccumulatedDegrees >= wallTurnTargetDegrees;
+  const bool timedFallbackReached = !wallTurnUsesImu &&
+      turnElapsedMs >= timedTurnMs;
+  const bool safetyTimeoutReached =
+      turnElapsedMs >= timedTurnMs + kWallTurnTimeoutExtraMs;
+
+  if (angleReached || timedFallbackReached || safetyTimeoutReached) {
+    finishWallAvoidance(nowMs);
+  }
+}
+
 void updateSearching(uint32_t nowMs) {
+  // A close top-sensor reading always wins over weight hunting so the claw
+  // and front of the robot remain clear of a wall.
+  if (closeWallAhead) {
+    detectionFrames = 0;
+    lostFrames = 0;
+    beginWallAvoidance();
+    return;
+  }
+
   if (latestFrameValid && latestWeight.found) {
     if (detectionFrames < kDetectionConfirmFrames) {
       ++detectionFrames;
@@ -383,20 +528,14 @@ void updateSearching(uint32_t nowMs) {
     return;
   }
 
-  if ((!latestFrameValid || !latestWeight.found) && closeWallAhead) {
-    commandMotors(kWallTurnLeftPower, kWallTurnRightPower);
-    return;
-  }
-
   driveSearchPattern(nowMs);
 }
 
 void updateApproaching() {
-  if ((!latestFrameValid || !latestWeight.found) && closeWallAhead) {
+  if (closeWallAhead) {
     detectionFrames = 0;
     lostFrames = 0;
-    setState(RobotState::searching);
-    commandMotors(kWallTurnLeftPower, kWallTurnRightPower);
+    beginWallAvoidance();
     return;
   }
 
@@ -462,8 +601,29 @@ void printStatus(uint32_t nowMs) {
   Serial.print(armAngleDegrees);
   Serial.print(" weight=");
   Serial.print(latestFrameValid && latestWeight.found ? "YES" : "NO");
-  Serial.print(" wall<=200mm=");
+  Serial.print(" wallTurn=");
   Serial.print(closeWallAhead ? "YES" : "NO");
+  Serial.print(" topLeft=");
+  if (topLeftDistanceMm > 0) {
+    Serial.print(topLeftDistanceMm);
+    Serial.print("mm");
+  } else {
+    Serial.print("INVALID");
+  }
+  Serial.print(" topRight=");
+  if (topRightDistanceMm > 0) {
+    Serial.print(topRightDistanceMm);
+    Serial.print("mm");
+  } else {
+    Serial.print("INVALID");
+  }
+  if (state == RobotState::turningFromWall) {
+    Serial.print(" wallTurnProgress=");
+    Serial.print(wallTurnAccumulatedDegrees, 1);
+    Serial.print('/');
+    Serial.print(wallTurnTargetDegrees, 0);
+    Serial.print("deg");
+  }
   if (latestFrameValid && latestWeight.found) {
     Serial.print(" distance=");
     Serial.print(latestWeight.averageDistanceMm);
@@ -483,7 +643,7 @@ void readCommands() {
     } else if ((command == 'g' || command == 'G') &&
                state == RobotState::emergencyStopped) {
       stopMotors();
-      armAngleDegrees = kArmDownAngleDegrees;
+      armAngleDegrees = kArmUpAngleDegrees;
       hd_move_servoArm::setAngle(armAngleDegrees);
       detectionFrames = 0;
       lostFrames = 0;
@@ -519,20 +679,18 @@ void setup() {
     useRangeTofFallback();
   }
 
-  if (!hd_move_servoArm::initialise(kArmDownAngleDegrees)) {
+  if (!hd_move_servoArm::initialise(kArmUpAngleDegrees)) {
     Serial.println("[INIT] Servo arm failed; robot stopped");
     setState(RobotState::emergencyStopped);
     return;
   }
-  armAngleDegrees = kArmDownAngleDegrees;
-  Serial.println("[INIT] Servo arm at 40 degrees");
+  armAngleDegrees = kArmUpAngleDegrees;
+  Serial.println("[INIT] Servo arm raised to 40 degrees");
 
   if (sensorSource == SensorSource::matrix8x8) {
     filter_weightDetect::clearBackgroundCalibration();
-    if (!calibrateEmptyScene()) {
-      Serial.println("[CALIBRATION] 8x8 failed; changing to ToF fallback");
-      useRangeTofFallback();
-    }
+    Serial.println(
+        "[INIT] 8x8 using calibration-free moving-scene weight detection");
   }
 
   if (sensorSource == SensorSource::matrix8x8) {
@@ -540,6 +698,11 @@ void setup() {
     // weight detector.
     initialiseRangeTofs();
   }
+
+  imuAvailable = hd_raw_imu::initialise();
+  Serial.println(imuAvailable
+      ? "[INIT] IMU angle-controlled wall turns ready"
+      : "[INIT] IMU unavailable; wall turns will use timed fallback");
 
   lastSensorMs = millis() - kSensorPeriodMs;
   setState(RobotState::searching);
@@ -550,6 +713,7 @@ void setup() {
 void loop() {
   readCommands();
   const uint32_t nowMs = millis();
+  ensureArmRaised(nowMs);
 
   if (state == RobotState::emergencyStopped) {
     stopMotors();
@@ -557,8 +721,15 @@ void loop() {
     return;
   }
 
+  if (state == RobotState::stoppingForWall ||
+      state == RobotState::turningFromWall) {
+    updateWallAvoidance(nowMs);
+    printStatus(nowMs);
+    return;
+  }
+
   if (state == RobotState::sweepingArmUp ||
-      state == RobotState::holdingArmUp ||
+      state == RobotState::holdingArmDown ||
       state == RobotState::sweepingArmDown) {
     stopMotors();
     updateArm(nowMs);
@@ -584,8 +755,10 @@ void loop() {
       updateWaitingForClear();
       break;
     case RobotState::sweepingArmUp:
-    case RobotState::holdingArmUp:
+    case RobotState::holdingArmDown:
     case RobotState::sweepingArmDown:
+    case RobotState::stoppingForWall:
+    case RobotState::turningFromWall:
     case RobotState::emergencyStopped:
       break;
   }

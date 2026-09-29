@@ -14,6 +14,9 @@ constexpr float kHorizontalFieldOfViewDegrees = 60.0f;
 constexpr uint16_t kOutOfRangeDistanceMm = 4000;
 constexpr uint16_t kCloseRangeDistanceMm = 80;
 constexpr uint16_t kMaximumWeightDistanceMm = 500;
+constexpr uint16_t kMovingSceneMinimumWeightDistanceMm = 30;
+constexpr uint16_t kMovingSceneMaximumWeightDistanceMm = 250;
+constexpr uint8_t kMovingSceneMaximumRow = 5;
 
 uint16_t backgroundMap[hd_raw_tof8x8::kGridSize]
                       [hd_raw_tof8x8::kGridSize] = {};
@@ -26,6 +29,16 @@ bool isValidDistance(uint16_t distanceMm) {
 bool isForeground(uint8_t row, uint8_t column, uint16_t measuredMm) {
   if (!isValidDistance(measuredMm)) {
     return false;
+  }
+
+  // Autonomous operation starts moving immediately and may power on with a
+  // weight already in view. In that mode there is no valid static background,
+  // so treat nearby returns as candidates and let the cluster size, shape,
+  // flatness, and plane rejection below distinguish weights from floor/walls.
+  if (!backgroundCalibrated) {
+    return row <= kMovingSceneMaximumRow &&
+        measuredMm >= kMovingSceneMinimumWeightDistanceMm &&
+        measuredMm <= kMovingSceneMaximumWeightDistanceMm;
   }
 
   const uint16_t backgroundMm = backgroundMap[row][column];
@@ -156,12 +169,8 @@ WeightResult detectWeight(
     bool verbose) {
   WeightResult result = {false, 0.0f, 0.0f, 0, 0};
 
-  if (!backgroundCalibrated) {
-    if (verbose) {
-      Serial.println(
-          "WARNING: background not calibrated - call calibrateBackground first");
-    }
-    return result;
+  if (!backgroundCalibrated && verbose) {
+    Serial.println("using calibration-free moving-scene detection");
   }
 
   bool visited[hd_raw_tof8x8::kGridSize][hd_raw_tof8x8::kGridSize] = {};
@@ -277,6 +286,12 @@ WeightResult detectWeight(
           maximumColumn);
       const bool flatnessOkay =
           isFlatEnough(minimumDistanceMm, maximumDistanceMm);
+      // In moving-scene mode, ignore clusters touching the image's left or
+      // right edge. Recorded empty-scene frames show intermittent floor
+      // returns there; side weights remain covered by the individual ToFs.
+      const bool movingScenePositionOkay = backgroundCalibrated ||
+          (minimumColumn > 0 &&
+           maximumColumn < hd_raw_tof8x8::kGridSize - 1);
 
       if (size > largestCandidateSize) {
         largestCandidateSize = size;
@@ -291,6 +306,7 @@ WeightResult detectWeight(
       // cluster was selected first and only validated afterwards, allowing a
       // distant background artifact to hide an equally sized nearby weight.
       if (distanceOkay && sizeOkay && planeOkay && flatnessOkay &&
+          movingScenePositionOkay &&
           size > bestSize) {
         bestSize = size;
         bestRowSum = rowSum;
