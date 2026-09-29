@@ -269,4 +269,40 @@ void printStatus() {
   Serial.println(status.rightMotorPower);
 }
 
+void printTestDecision(
+    const filter_weightDetect::WeightIdentification& weight) {
+  Serial.print("[WEIGHT LOGIC TEST] ");
+
+  if (!filter_weightDetect::weightFound(weight)) {
+    Serial.println("no weight -> hunt forward in snake pattern");
+    return;
+  }
+
+  if (!weight.seenBy8x8) {
+    if (weight.seenByRightTof && weight.seenByLeftTof) {
+      Serial.println(
+          weight.rightDistanceMm <= weight.leftDistanceMm
+              ? "weight on both sides -> turn right"
+              : "weight on both sides -> turn left");
+    } else {
+      Serial.println(
+          weight.seenByRightTof
+              ? "weight on right -> turn right"
+              : "weight on left -> turn left");
+    }
+    return;
+  }
+
+  const float error = weight.column - kTargetColumn;
+  if (fabsf(error) > kCentredToleranceColumns) {
+    Serial.println(error > 0.0f
+        ? "8x8 weight right of centre -> turn right"
+        : "8x8 weight left of centre -> turn left");
+  } else if (weight.centreDistanceMm <= kCollectionZoneDistanceMm) {
+    Serial.println("weight in collection zone");
+  } else {
+    Serial.println("weight centred -> drive forward");
+  }
+}
+
 }  // namespace logic_weightHunting

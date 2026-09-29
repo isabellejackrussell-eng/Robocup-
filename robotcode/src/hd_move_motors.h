@@ -15,6 +15,6 @@ void motors_stop();
 // Returns true after motors_init() has completed.
 bool motors_is_initialised();
 
-// Runs the same blocking forward/stop/reverse/stop pattern as the working
-// sensor_tests/motor_test sketch, using a power of 250.
-void motors_test_forward_back();
+// Runs a blocking forward, backward, point-turn-right, and point-turn-left test.
+// Both motors are stopped for one second between movements.
+void motors_test_movements();

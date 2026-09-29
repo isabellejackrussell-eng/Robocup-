@@ -82,6 +82,22 @@ bool initialise() {
   return commandArm(kDownAngleDegrees, State::movingDown, millis());
 }
 
+bool triggerCaptureTest(uint32_t nowMs) {
+  if (!initialised || state != State::down || collectionCompleted) {
+    Serial.println("[WEIGHT COLLECTION TEST] Arm is not ready and down");
+    return false;
+  }
+
+  hd_raw_limitSwitch::Reading limitReading;
+  if (!readLimitSwitch(limitReading) || limitReading.pressed) {
+    Serial.println("[WEIGHT COLLECTION TEST] Limit switch must be open");
+    return false;
+  }
+
+  Serial.println("[WEIGHT COLLECTION TEST] Raising arm to capture weight");
+  return commandArm(kUpAngleDegrees, State::movingUp, nowMs);
+}
+
 void update(uint32_t nowMs) {
   if (!initialised || state == State::fault) {
     return;

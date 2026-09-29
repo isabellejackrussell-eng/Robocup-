@@ -68,6 +68,10 @@ const Status& getStatus();
 const char* stateName(State state);
 void printStatus();
 
+// Prints the action that the hunting logic would take, without moving motors.
+void printTestDecision(
+    const filter_weightDetect::WeightIdentification& weight);
+
 }  // namespace logic_weightHunting
 
 #endif

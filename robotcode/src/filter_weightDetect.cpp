@@ -11,6 +11,8 @@ constexpr uint16_t kFlatnessThresholdMm = 40;
 constexpr float kWeightDiameterMm = 50.0f;
 constexpr float kHorizontalFieldOfViewDegrees = 60.0f;
 constexpr uint16_t kOutOfRangeDistanceMm = 4000;
+constexpr uint16_t kCloseRangeDistanceMm = 80;
+constexpr uint16_t kMaximumWeightDistanceMm = 300;
 
 uint16_t backgroundMap[hd_raw_tof8x8::kGridSize]
                       [hd_raw_tof8x8::kGridSize] = {};
@@ -49,8 +51,12 @@ float expectedWidthPixels(float distanceMm) {
 
 bool sizeIsPlausible(uint8_t clusterSize, float distanceMm) {
   const float expectedWidth = expectedWidthPixels(distanceMm);
-  const float minimumSize =
-      max(expectedWidth * 0.5f, static_cast<float>(kMinimumClusterSize));
+  // The recorded sensor data shows that a 50 mm weight closer than 80 mm is
+  // represented by a stable two-pixel vertical cluster, rather than the much
+  // larger footprint predicted by the ideal field-of-view geometry.
+  const float minimumSize = distanceMm < kCloseRangeDistanceMm
+      ? static_cast<float>(kMinimumClusterSize)
+      : max(expectedWidth * 0.5f, static_cast<float>(kMinimumClusterSize));
   const float maximumSize =
       max(expectedWidth * expectedWidth * 4.0f, 6.0f);
 
@@ -160,12 +166,13 @@ WeightResult detectWeight(
   uint16_t bestRowSum = 0;
   uint16_t bestColumnSum = 0;
   uint32_t bestDistanceSum = 0;
-  uint8_t bestMinimumRow = 0;
-  uint8_t bestMaximumRow = 0;
-  uint8_t bestMinimumColumn = 0;
-  uint8_t bestMaximumColumn = 0;
-  uint16_t bestMinimumDistanceMm = 0;
-  uint16_t bestMaximumDistanceMm = 0;
+
+  uint8_t largestCandidateSize = 0;
+  uint16_t largestCandidateDistanceMm = 0;
+  bool largestCandidateDistanceOkay = false;
+  bool largestCandidateSizeOkay = false;
+  bool largestCandidatePlaneOkay = false;
+  bool largestCandidateFlatnessOkay = false;
 
   for (uint8_t row = 0; row < hd_raw_tof8x8::kGridSize; ++row) {
     for (uint8_t column = 0; column < hd_raw_tof8x8::kGridSize; ++column) {
@@ -245,50 +252,69 @@ WeightResult detectWeight(
         }
       }
 
-      if (size > bestSize) {
+      if (size < kMinimumClusterSize) {
+        continue;
+      }
+
+      const uint16_t averageDistanceMm = distanceSum / size;
+      const bool distanceOkay =
+          averageDistanceMm <= kMaximumWeightDistanceMm;
+      const bool sizeOkay = sizeIsPlausible(size, averageDistanceMm);
+      const bool planeOkay = !looksLikeAPlane(
+          minimumRow,
+          maximumRow,
+          minimumColumn,
+          maximumColumn);
+      const bool flatnessOkay =
+          isFlatEnough(minimumDistanceMm, maximumDistanceMm);
+
+      if (size > largestCandidateSize) {
+        largestCandidateSize = size;
+        largestCandidateDistanceMm = averageDistanceMm;
+        largestCandidateDistanceOkay = distanceOkay;
+        largestCandidateSizeOkay = sizeOkay;
+        largestCandidatePlaneOkay = planeOkay;
+        largestCandidateFlatnessOkay = flatnessOkay;
+      }
+
+      // Select the largest valid weight candidate. Previously the largest raw
+      // cluster was selected first and only validated afterwards, allowing a
+      // distant background artifact to hide an equally sized nearby weight.
+      if (distanceOkay && sizeOkay && planeOkay && flatnessOkay &&
+          size > bestSize) {
         bestSize = size;
         bestRowSum = rowSum;
         bestColumnSum = columnSum;
         bestDistanceSum = distanceSum;
-        bestMinimumRow = minimumRow;
-        bestMaximumRow = maximumRow;
-        bestMinimumColumn = minimumColumn;
-        bestMaximumColumn = maximumColumn;
-        bestMinimumDistanceMm = minimumDistanceMm;
-        bestMaximumDistanceMm = maximumDistanceMm;
       }
     }
   }
 
   if (bestSize < kMinimumClusterSize) {
+    if (verbose && largestCandidateSize >= kMinimumClusterSize) {
+      Serial.print("rejected candidate: size=");
+      Serial.print(largestCandidateSize);
+      Serial.print(" dist=");
+      Serial.print(largestCandidateDistanceMm);
+      Serial.print(" | distanceOk=");
+      Serial.print(largestCandidateDistanceOkay);
+      Serial.print(" sizeOk=");
+      Serial.print(largestCandidateSizeOkay);
+      Serial.print(" planeOk=");
+      Serial.print(largestCandidatePlaneOkay);
+      Serial.print(" flatOk=");
+      Serial.println(largestCandidateFlatnessOkay);
+    }
     return result;
   }
 
   const uint16_t averageDistanceMm = bestDistanceSum / bestSize;
-  const bool sizeOkay = sizeIsPlausible(bestSize, averageDistanceMm);
-  const bool planeOkay = !looksLikeAPlane(
-      bestMinimumRow,
-      bestMaximumRow,
-      bestMinimumColumn,
-      bestMaximumColumn);
-  const bool flatnessOkay =
-      isFlatEnough(bestMinimumDistanceMm, bestMaximumDistanceMm);
-
   if (verbose) {
-    Serial.print("candidate: size=");
+    Serial.print("accepted candidate: size=");
     Serial.print(bestSize);
     Serial.print(" dist=");
     Serial.print(averageDistanceMm);
-    Serial.print(" | sizeOk=");
-    Serial.print(sizeOkay);
-    Serial.print(" planeOk=");
-    Serial.print(planeOkay);
-    Serial.print(" flatOk=");
-    Serial.println(flatnessOkay);
-  }
-
-  if (!sizeOkay || !planeOkay || !flatnessOkay) {
-    return result;
+    Serial.println(" | distanceOk=1 sizeOk=1 planeOk=1 flatOk=1");
   }
 
   result.found = true;
@@ -371,16 +397,6 @@ RangeObjectDetection classifyPairedSensors(
   };
 }
 
-RangeObjectDetection classifyWallSensor(
-    const hd_raw_tof::Readings& readings,
-    uint8_t sensorIndex) {
-  if (!rangeSensorSeesObject(readings, sensorIndex)) {
-    return {RangeObjectType::none, 0};
-  }
-
-  return {RangeObjectType::wall, readings[sensorIndex].distanceMm};
-}
-
 void updateRangeFilter(
     RangeFilterState& state,
     const RangeObjectDetection& reading) {
@@ -415,9 +431,6 @@ void updateRangeDetections(const hd_raw_tof::Readings& readings) {
   for (uint8_t pair = 0; pair < kPairedDetectionCount; ++pair) {
     updateRangeFilter(rangeStates[pair], classifyPairedSensors(readings, pair));
   }
-
-  updateRangeFilter(rangeStates[2], classifyWallSensor(readings, 4));
-  updateRangeFilter(rangeStates[3], classifyWallSensor(readings, 5));
 }
 
 RangeObjectDetection getRangeDetection(uint8_t detectionIndex) {
@@ -448,13 +461,8 @@ void printRangeDetections() {
     const RangeObjectDetection detection =
         getRangeDetection(detectionIndex);
 
-    if (detectionIndex < kPairedDetectionCount) {
-      Serial.print("Pair ");
-      Serial.print(detectionIndex);
-    } else {
-      Serial.print("Wall sensor ");
-      Serial.print(detectionIndex + 2);
-    }
+    Serial.print("ToF set ");
+    Serial.print(detectionIndex);
 
     Serial.print(": ");
     Serial.print(rangeObjectTypeName(detection.type));
@@ -480,9 +488,9 @@ WeightIdentification identifyWeight(
   constexpr uint8_t kRightPairIndex = 0;
   constexpr uint8_t kLeftPairIndex = 1;
 
-  // Top sensors from the right and left pairs plus the two existing wall-only
-  // sensors can all confirm that an 8x8 candidate is a tall wall.
-  constexpr uint8_t kTopOrWallSensorIndices[] = {1, 3, 4, 5};
+  // The top sensors from the right and left pairs can confirm that an 8x8
+  // candidate is a tall wall.
+  constexpr uint8_t kTopOrWallSensorIndices[] = {1, 3};
 
   // updateRangeDetections() supplies the debounced three-sample result used
   // here. Keep the raw readings only for the top-sensor wall comparison.
@@ -583,6 +591,89 @@ void printWeightIdentification(const WeightIdentification& identification) {
   }
 
   Serial.println();
+}
+
+WeightIdentification runWeightDetectionTest() {
+  Serial.println();
+  Serial.println("========== WEIGHT FILTER TEST ==========");
+
+  hd_raw_tof::Readings readings;
+  hd_raw_tof::readAll(readings);
+  updateRangeDetections(readings);
+
+  for (uint8_t set = 0; set < kPairedDetectionCount; ++set) {
+    Serial.print("[RAW ToF set ");
+    Serial.print(set);
+    Serial.print(set == 0 ? " / RIGHT] " : " / LEFT] ");
+
+    for (uint8_t sensorInSet = 0; sensorInSet < 2; ++sensorInSet) {
+      const uint8_t sensor = set * 2 + sensorInSet;
+      Serial.print(sensorInSet == 0 ? "bottom=" : " top=");
+
+      if (!hd_raw_tof::isSensorInitialised(sensor)) {
+        Serial.print("NOT_INITIALISED");
+      } else if (readings[sensor].timedOut) {
+        Serial.print("TIMEOUT");
+      } else if (!readings[sensor].valid) {
+        Serial.print("INVALID");
+      } else {
+        Serial.print(readings[sensor].distanceMm);
+        Serial.print("mm");
+      }
+    }
+
+    Serial.println();
+  }
+
+  Serial.print("[FILTERED PAIRS] ");
+  printRangeDetections();
+
+  WeightIdentification noWeight = {
+      WeightState::notFound,
+      0,
+      0,
+      0,
+      0,
+      -1.0f,
+      false,
+      false,
+      false,
+  };
+
+  hd_raw_tof8x8::Frame frame;
+  if (!hd_raw_tof8x8::readFrame(frame)) {
+    Serial.println("[RAW 8x8] READ FAILED");
+    printWeightIdentification(noWeight);
+    Serial.println("========================================");
+    return noWeight;
+  }
+
+  Serial.println("[RAW 8x8 / mm]");
+  for (uint8_t row = 0; row < hd_raw_tof8x8::kGridSize; ++row) {
+    Serial.print("row ");
+    Serial.print(row);
+    Serial.print(": ");
+    for (uint8_t column = 0;
+         column < hd_raw_tof8x8::kGridSize;
+         ++column) {
+      Serial.print(frame[row * hd_raw_tof8x8::kGridSize + column]);
+      if (column + 1 < hd_raw_tof8x8::kGridSize) {
+        Serial.print('\t');
+      }
+    }
+    Serial.println();
+  }
+
+  Serial.print("[8x8 FILTER] ");
+  const WeightResult matrixWeight = detectWeight(frame, true);
+  printWeightResult(matrixWeight);
+
+  Serial.print("[COMBINED FILTER] ");
+  const WeightIdentification identification =
+      identifyWeight(readings, matrixWeight);
+  printWeightIdentification(identification);
+  Serial.println("========================================");
+  return identification;
 }
 
 }  // namespace filter_weightDetect

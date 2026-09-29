@@ -5,7 +5,9 @@
 
 namespace hd_raw_tof {
 
-constexpr uint8_t kSensorCount = 6;
+// Only set 0 and set 1 are currently fitted (two sensors per set).
+constexpr uint8_t kSensorCount = 4;
+// constexpr uint8_t kSensorCount = 6;  // Enable when set 2 is fitted.
 constexpr uint8_t kExpanderI2cAddress = 0x71;
 constexpr uint32_t kI2cClockHz = 400000;
 constexpr uint32_t kMeasurementTimingBudgetUs = 50000;
@@ -24,7 +26,7 @@ struct Reading {
 
 using Readings = Reading[kSensorCount];
 
-// Initialises the SX1509 expander and all six range sensors.
+// Initialises the SX1509 expander and all four fitted range sensors.
 // Returns false if the expander or any sensor fails to initialise.
 bool initialise();
 

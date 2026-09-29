@@ -71,7 +71,7 @@ bool motors_is_initialised() {
   return initialised;
 }
 
-void motors_test_forward_back() {
+void motors_test_movements() {
   if (!initialised) {
     motors_init();
   }
@@ -86,6 +86,22 @@ void motors_test_forward_back() {
 
   Serial.println("[MOTORS TEST] Reverse");
   motors_write(-250, -250);
+  delay(2000);
+
+  Serial.println("[MOTORS TEST] Stop");
+  motors_stop();
+  delay(1000);
+
+  Serial.println("[MOTORS TEST] Point turn right");
+  motors_write(250, -250);
+  delay(2000);
+
+  Serial.println("[MOTORS TEST] Stop");
+  motors_stop();
+  delay(1000);
+
+  Serial.println("[MOTORS TEST] Point turn left");
+  motors_write(-250, 250);
   delay(2000);
 
   Serial.println("[MOTORS TEST] Stop");

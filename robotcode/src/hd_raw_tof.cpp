@@ -8,16 +8,21 @@
 namespace hd_raw_tof {
 namespace {
 
-constexpr uint8_t kXshutPins[kSensorCount] = {0, 1, 2, 3, 4, 5};
+constexpr uint8_t kXshutPins[kSensorCount] = {
+    0, 1, 2, 3,
+    // 4, 5,  // Set 2 is not currently fitted.
+};
 constexpr uint8_t kSensorI2cAddresses[kSensorCount] = {
-    0x30, 0x31, 0x32, 0x34, 0x35, 0x36};
+    0x30, 0x31, 0x32, 0x34,
+    // 0x35, 0x36,  // Set 2 is not currently fitted.
+};
 constexpr SensorModel kSensorModels[kSensorCount] = {
     SensorModel::vl53l1x,
     SensorModel::vl53l1x,
     SensorModel::vl53l1x,
     SensorModel::vl53l0x,
-    SensorModel::vl53l0x,
-    SensorModel::vl53l0x,
+    // SensorModel::vl53l0x,  // Set 2 is not currently fitted.
+    // SensorModel::vl53l0x,
 };
 
 SX1509 ioExpander;

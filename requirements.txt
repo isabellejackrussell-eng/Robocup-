@@ -1,0 +1,7 @@
+# Install with: python -m pip install -r requirements.txt
+# Then download the firmware libraries with:
+# pio pkg install --project-dir robot_firmware
+#
+# Arduino/C++ dependencies are declared in robot_firmware/platformio.ini.
+# PlatformIO installs them automatically when the firmware is built.
+platformio==6.2.0

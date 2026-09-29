@@ -23,6 +23,10 @@ constexpr uint32_t kArmMovementTimeMs = 1500;
 // the limit switch to be available. The arm is then put in its down position.
 bool initialise();
 
+// Starts the capture sequence without requiring a detected weight. Intended
+// for the serial 'w' hardware test.
+bool triggerCaptureTest(uint32_t nowMs = millis());
+
 // Reads the weight-hunting collection-zone state and the limit switch, then
 // advances the capture sequence without blocking the main loop.
 void update(uint32_t nowMs = millis());

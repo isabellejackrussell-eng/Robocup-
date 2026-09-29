@@ -36,10 +36,10 @@ WeightResult detectWeight(
 void printWeightResult(const WeightResult& result);
 
 // -----------------------------------------------------------------------------
-// Six single-point ToF sensors
+// Four single-point ToF sensors, arranged as two bottom/top pairs
 // -----------------------------------------------------------------------------
 
-constexpr uint8_t kRangeDetectionCount = 4;
+constexpr uint8_t kRangeDetectionCount = 2;
 
 enum class RangeObjectType : uint8_t {
   none,
@@ -61,8 +61,7 @@ constexpr uint16_t kWallDistanceToleranceMm = 100;
 // Clears the three-sample debounce/filter state.
 void resetRangeDetections();
 
-// Updates two bottom/top weight-detection pairs (0/1 and 2/3), followed by
-// the two wall-only sensors (4 and 5).
+// Updates the two bottom/top weight-detection pairs (0/1 and 2/3).
 void updateRangeDetections(const hd_raw_tof::Readings& readings);
 
 RangeObjectDetection getRangeDetection(uint8_t detectionIndex);
@@ -110,6 +109,10 @@ WeightIdentification identifyWeight(
 
 bool weightFound(const WeightIdentification& identification);
 void printWeightIdentification(const WeightIdentification& identification);
+
+// Reads both two-sensor ToF sets and the 8x8 sensor once, prints every raw
+// value plus the filtered results, and returns the combined identification.
+WeightIdentification runWeightDetectionTest();
 
 }  // namespace filter_weightDetect
 

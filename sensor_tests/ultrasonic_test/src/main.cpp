@@ -9,6 +9,8 @@ const int AechoPin = 2;
 const int BtrigPin = 5;
 const int BechoPin = 4;
 
+// PlatformIO compiles this file as C++, so declare the helper before loop()
+// calls it. The Arduino IDE normally generates this declaration automatically.
 long microsecondsToCentimeters(long microseconds);
 
 void setup() 
