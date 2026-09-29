@@ -27,9 +27,8 @@ bool calibrateBackgroundAveraged(
 bool isBackgroundCalibrated();
 void clearBackgroundCalibration();
 
-// Finds the best weight-shaped cluster. With a calibrated background it uses
-// background subtraction; otherwise it uses nearby depth clusters so a moving
-// robot can detect a weight that was already present at power-on.
+// Compare a frame with the calibrated background and find the best
+// weight-shaped foreground cluster.
 WeightResult detectWeight(
     const hd_raw_tof8x8::Frame& distances,
     bool verbose = true);
