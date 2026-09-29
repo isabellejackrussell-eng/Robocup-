@@ -7,12 +7,13 @@ namespace {
 
 constexpr uint16_t kNearDeltaMm = 40;
 constexpr uint8_t kMinimumClusterSize = 2;
+constexpr uint16_t kSinglePixelWeightDistanceMm = 250;
 constexpr uint16_t kFlatnessThresholdMm = 40;
 constexpr float kWeightDiameterMm = 50.0f;
 constexpr float kHorizontalFieldOfViewDegrees = 60.0f;
 constexpr uint16_t kOutOfRangeDistanceMm = 4000;
 constexpr uint16_t kCloseRangeDistanceMm = 80;
-constexpr uint16_t kMaximumWeightDistanceMm = 300;
+constexpr uint16_t kMaximumWeightDistanceMm = 500;
 
 uint16_t backgroundMap[hd_raw_tof8x8::kGridSize]
                       [hd_raw_tof8x8::kGridSize] = {};
@@ -51,12 +52,19 @@ float expectedWidthPixels(float distanceMm) {
 
 bool sizeIsPlausible(uint8_t clusterSize, float distanceMm) {
   const float expectedWidth = expectedWidthPixels(distanceMm);
+  // The 300 mm dataset consistently sees the weight as one pixel. Permit a
+  // singleton only at long range; the autonomous controller separately
+  // requires three consecutive detections before it leaves its search path.
+  const float measuredMinimumSize =
+      distanceMm >= kSinglePixelWeightDistanceMm
+      ? 1.0f
+      : static_cast<float>(kMinimumClusterSize);
   // The recorded sensor data shows that a 50 mm weight closer than 80 mm is
   // represented by a stable two-pixel vertical cluster, rather than the much
   // larger footprint predicted by the ideal field-of-view geometry.
   const float minimumSize = distanceMm < kCloseRangeDistanceMm
       ? static_cast<float>(kMinimumClusterSize)
-      : max(expectedWidth * 0.5f, static_cast<float>(kMinimumClusterSize));
+      : max(expectedWidth * 0.5f, measuredMinimumSize);
   const float maximumSize =
       max(expectedWidth * expectedWidth * 4.0f, 6.0f);
 
@@ -117,10 +125,16 @@ bool calibrateBackgroundAveraged(
     }
   }
 
+  // A pixel must return a real distance in at least half the calibration
+  // frames. This prevents one transient short reading in an otherwise empty
+  // (4000 mm / no-return) pixel from hiding a later weight at that location.
+  const size_t minimumValidSamples = (frameCount + 1) / 2;
+
   for (size_t point = 0; point < hd_raw_tof8x8::kPointCount; ++point) {
     const uint8_t row = point / hd_raw_tof8x8::kGridSize;
     const uint8_t column = point % hd_raw_tof8x8::kGridSize;
-    backgroundMap[row][column] = validCounts[point] == 0
+    backgroundMap[row][column] =
+        validCounts[point] < minimumValidSamples
         ? kOutOfRangeDistanceMm
         : sums[point] / validCounts[point];
   }
@@ -252,10 +266,6 @@ WeightResult detectWeight(
         }
       }
 
-      if (size < kMinimumClusterSize) {
-        continue;
-      }
-
       const uint16_t averageDistanceMm = distanceSum / size;
       const bool distanceOkay =
           averageDistanceMm <= kMaximumWeightDistanceMm;
@@ -290,8 +300,8 @@ WeightResult detectWeight(
     }
   }
 
-  if (bestSize < kMinimumClusterSize) {
-    if (verbose && largestCandidateSize >= kMinimumClusterSize) {
+  if (bestSize == 0) {
+    if (verbose && largestCandidateSize > 0) {
       Serial.print("rejected candidate: size=");
       Serial.print(largestCandidateSize);
       Serial.print(" dist=");

@@ -6,7 +6,7 @@ void motors_init();
 
 // Sets the left and right motor power. Each value is clamped to -450..450.
 // Positive values drive forward, negative values reverse, and zero stops.
-// The right motor direction is inverted to match the robot's wiring.
+// The per-track direction settings account for the robot's motor mounting.
 void motors_write(int leftPower, int rightPower);
 
 // Stops both motors.

@@ -9,10 +9,14 @@ Servo armServo;
 bool initialised = false;
 uint8_t commandedAngleDegrees = kInitialAngleDegrees;
 
+constexpr int kMinimumPulseWidthUs = 544;
+constexpr int kMaximumPulseWidthUs = 2400;
+
 }  // namespace
 
 bool initialise(uint8_t initialAngleDegrees) {
-    armServo.attach(kServoPin);
+    armServo.attach(
+        kServoPin, kMinimumPulseWidthUs, kMaximumPulseWidthUs);
     initialised = armServo.attached();
 
     if (!initialised) {
@@ -34,7 +38,15 @@ bool setAngle(int angleDegrees) {
     );
 
     commandedAngleDegrees = static_cast<uint8_t>(angleDegrees);
-    armServo.write(commandedAngleDegrees);
+    // Servo.write() clamps degree commands above 180. Map the arm's tested
+    // 0..190 degree command range explicitly onto its configured pulse range.
+    const int pulseWidthUs = map(
+        commandedAngleDegrees,
+        kMinimumAngleDegrees,
+        kMaximumAngleDegrees,
+        kMinimumPulseWidthUs,
+        kMaximumPulseWidthUs);
+    armServo.writeMicroseconds(pulseWidthUs);
     return true;
 }
 

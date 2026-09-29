@@ -16,8 +16,10 @@ constexpr int kFullReverseUs = 1050;
 
 constexpr int kMaxPower = 450;
 
-constexpr bool kLeftInverted = false;
-constexpr bool kRightInverted = true;
+// The motors face opposite directions on the chassis. These values make a
+// positive power command move both tracks physically forward.
+constexpr bool kLeftInverted = true;
+constexpr bool kRightInverted = false;
 
 Servo motorLeft;
 Servo motorRight;
