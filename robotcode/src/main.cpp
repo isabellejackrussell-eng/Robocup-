@@ -59,6 +59,7 @@ bool haveRangeReadings = false;
 uint32_t lastWeightDetectionMs = 0;
 uint32_t lastMatrixSampleMs = 0;
 uint32_t lastRangeSampleMs = 0;
+uint32_t lastMatrixInitialiseAttemptMs = 0;
 hd_raw_tof::Readings rangeReadings = {};
 
 void printFrame(const hd_raw_tof8x8::Frame& frame) {
@@ -146,6 +147,12 @@ void driveForward() {
 
 void runCaptureArmCycle() {
   motors_stop();
+
+  if (!hd_move_servoArm::isInitialised()) {
+    Serial.println("[CAPTURE] Arm unavailable; continuing search");
+    return;
+  }
+
   Serial.println("[CAPTURE] Weight in zone; sweeping arm 40 -> 200 degrees");
 
   for (int angle = kArmUpAngleDegrees;
@@ -310,17 +317,18 @@ void setup() {
   digitalWrite(kIoPowerPin, HIGH);
   delay(500);
 
-  while (!hd_raw_tof8x8::initialise()) {
-    Serial.println("begin error, retrying...");
-    delay(kRetryPeriodMs);
-  }
+  const bool matrixLidarReady = hd_raw_tof8x8::initialise();
+  lastMatrixInitialiseAttemptMs = millis();
+  Serial.println(matrixLidarReady
+      ? "[INIT] 8x8 weight sensor ready"
+      : "[INIT] 8x8 weight sensor unavailable; moving forward and retrying");
 
   motors_init();
   motors_stop();
 
   if (!hd_move_servoArm::initialise(kArmUpAngleDegrees)) {
-    motionEnabled = false;
-    Serial.println("[INIT] Servo arm failed; motion disabled");
+    Serial.println(
+        "[INIT] Servo arm failed; drive remains enabled but capture is unavailable");
   } else {
     Serial.println("[INIT] Servo arm raised to 40 degrees");
   }
@@ -373,9 +381,25 @@ void loop() {
   }
   lastMatrixSampleMs = nowMs;
 
+  if (!hd_raw_tof8x8::isInitialised()) {
+    if (nowMs - lastMatrixInitialiseAttemptMs >= kRetryPeriodMs) {
+      lastMatrixInitialiseAttemptMs = nowMs;
+      if (hd_raw_tof8x8::initialise()) {
+        Serial.println("[8x8] Weight sensor recovered");
+      } else {
+        Serial.println("[8x8] Still unavailable; continuing forward");
+      }
+    }
+    clearHeldWeight();
+    driveForward();
+    return;
+  }
+
   hd_raw_tof8x8::Frame frame;
   if (!readFrame(frame)) {
-    motors_stop();
+    clearHeldWeight();
+    driveForward();
+    Serial.println("[MOTION] FORWARD - WEIGHT FRAME UNAVAILABLE");
     return;
   }
 
