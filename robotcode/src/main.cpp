@@ -289,8 +289,11 @@ bool updateWallAvoidance(uint32_t nowMs) {
 
   // Continue an active turn at IMU rate. Start a new bang-bang decision only
   // after a fresh ToF sample so stale readings cannot immediately retrigger.
-  if (logic_wallAvoidance::isTurning() || rangeSampleDue) {
-    return logic_wallAvoidance::update(rangeReadings, nowMs);
+  if (logic_wallAvoidance::isActive() || rangeSampleDue) {
+    return logic_wallAvoidance::update(
+        rangeReadings,
+        nowMs,
+        rangeSampleDue);
   }
   return false;
 }

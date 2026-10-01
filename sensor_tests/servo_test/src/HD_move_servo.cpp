@@ -15,20 +15,9 @@ void setup() {
 }
 
 void loop() {
+  myServo.write(40);
+  delay(1000);
 
-  // Slowly move from 95° to 120°
-  for (int angle = 40; angle <= 190; angle = angle+5) {
-    myServo.write(angle);
-    delay(50);
-  }
-
-  delay(500);
-
-  // Slowly move back from 120° to 95°
-  for (int angle = 190; angle >= 40; angle = angle- 5) {
-    myServo.write(angle);
-    delay(50);
-  }
-
+  myServo.write(220);
   delay(1000);
 }
