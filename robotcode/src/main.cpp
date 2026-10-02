@@ -31,7 +31,7 @@ constexpr float kSteeringGain = 35.0f;
 constexpr int kMaximumSteeringCorrection = 70;
 constexpr int kCloseAlignmentTurnPower = 300;
 constexpr int kArmUpAngleDegrees = 40;
-constexpr int kArmDownAngleDegrees = 250;
+constexpr int kArmDownAngleDegrees = 200;
 constexpr int kArmStepDegrees = 2;
 constexpr uint32_t kArmStepPeriodMs = 20;
 constexpr uint32_t kArmDownHoldMs = 750;
@@ -59,7 +59,6 @@ bool haveRangeReadings = false;
 uint32_t lastWeightDetectionMs = 0;
 uint32_t lastMatrixSampleMs = 0;
 uint32_t lastRangeSampleMs = 0;
-uint32_t lastMatrixInitialiseAttemptMs = 0;
 hd_raw_tof::Readings rangeReadings = {};
 
 void printFrame(const hd_raw_tof8x8::Frame& frame) {
@@ -147,13 +146,7 @@ void driveForward() {
 
 void runCaptureArmCycle() {
   motors_stop();
-
-  if (!hd_move_servoArm::isInitialised()) {
-    Serial.println("[CAPTURE] Arm unavailable; continuing search");
-    return;
-  }
-
-  Serial.println("[CAPTURE] Weight in zone; sweeping arm 40 -> 250 degrees");
+  Serial.println("[CAPTURE] Weight in zone; sweeping arm 40 -> 200 degrees");
 
   for (int angle = kArmUpAngleDegrees;
        angle <= kArmDownAngleDegrees;
@@ -296,11 +289,8 @@ bool updateWallAvoidance(uint32_t nowMs) {
 
   // Continue an active turn at IMU rate. Start a new bang-bang decision only
   // after a fresh ToF sample so stale readings cannot immediately retrigger.
-  if (logic_wallAvoidance::isActive() || rangeSampleDue) {
-    return logic_wallAvoidance::update(
-        rangeReadings,
-        nowMs,
-        rangeSampleDue);
+  if (logic_wallAvoidance::isTurning() || rangeSampleDue) {
+    return logic_wallAvoidance::update(rangeReadings, nowMs);
   }
   return false;
 }
@@ -317,18 +307,17 @@ void setup() {
   digitalWrite(kIoPowerPin, HIGH);
   delay(500);
 
-  const bool matrixLidarReady = hd_raw_tof8x8::initialise();
-  lastMatrixInitialiseAttemptMs = millis();
-  Serial.println(matrixLidarReady
-      ? "[INIT] 8x8 weight sensor ready"
-      : "[INIT] 8x8 weight sensor unavailable; moving forward and retrying");
+  while (!hd_raw_tof8x8::initialise()) {
+    Serial.println("begin error, retrying...");
+    delay(kRetryPeriodMs);
+  }
 
   motors_init();
   motors_stop();
 
   if (!hd_move_servoArm::initialise(kArmUpAngleDegrees)) {
-    Serial.println(
-        "[INIT] Servo arm failed; drive remains enabled but capture is unavailable");
+    motionEnabled = false;
+    Serial.println("[INIT] Servo arm failed; motion disabled");
   } else {
     Serial.println("[INIT] Servo arm raised to 40 degrees");
   }
@@ -381,25 +370,9 @@ void loop() {
   }
   lastMatrixSampleMs = nowMs;
 
-  if (!hd_raw_tof8x8::isInitialised()) {
-    if (nowMs - lastMatrixInitialiseAttemptMs >= kRetryPeriodMs) {
-      lastMatrixInitialiseAttemptMs = nowMs;
-      if (hd_raw_tof8x8::initialise()) {
-        Serial.println("[8x8] Weight sensor recovered");
-      } else {
-        Serial.println("[8x8] Still unavailable; continuing forward");
-      }
-    }
-    clearHeldWeight();
-    driveForward();
-    return;
-  }
-
   hd_raw_tof8x8::Frame frame;
   if (!readFrame(frame)) {
-    clearHeldWeight();
-    driveForward();
-    Serial.println("[MOTION] FORWARD - WEIGHT FRAME UNAVAILABLE");
+    motors_stop();
     return;
   }
 
