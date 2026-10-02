@@ -14,7 +14,6 @@ namespace {
 constexpr uint8_t kIoPowerPin = 49;
 constexpr uint32_t kBaudRate = 115200;
 constexpr uint32_t kSerialWaitMs = 3000;
-constexpr uint32_t kRetryPeriodMs = 1000;
 constexpr uint32_t kSamplePeriodMs = 100;
 constexpr uint32_t kRangeSamplePeriodMs = 50;
 constexpr uint32_t kWeightDetectionHoldMs = 750;
@@ -146,6 +145,11 @@ void driveForward() {
 
 void runCaptureArmCycle() {
   motors_stop();
+  if (!hd_move_servoArm::isInitialised()) {
+    Serial.println("[CAPTURE] Arm unavailable; continuing straight");
+    return;
+  }
+
   Serial.println("[CAPTURE] Weight in zone; sweeping arm 40 -> 200 degrees");
 
   for (int angle = kArmUpAngleDegrees;
@@ -307,17 +311,17 @@ void setup() {
   digitalWrite(kIoPowerPin, HIGH);
   delay(500);
 
-  while (!hd_raw_tof8x8::initialise()) {
-    Serial.println("begin error, retrying...");
-    delay(kRetryPeriodMs);
-  }
+  const bool matrixLidarReady = hd_raw_tof8x8::initialise();
+  Serial.println(matrixLidarReady
+      ? "[INIT] 8x8 weight sensor ready"
+      : "[INIT] 8x8 weight sensor unavailable; continuing without detection");
 
   motors_init();
   motors_stop();
 
   if (!hd_move_servoArm::initialise(kArmUpAngleDegrees)) {
-    motionEnabled = false;
-    Serial.println("[INIT] Servo arm failed; motion disabled");
+    Serial.println(
+        "[INIT] Servo arm failed; continuing straight without capture");
   } else {
     Serial.println("[INIT] Servo arm raised to 40 degrees");
   }
@@ -372,7 +376,8 @@ void loop() {
 
   hd_raw_tof8x8::Frame frame;
   if (!readFrame(frame)) {
-    motors_stop();
+    driveForward();
+    Serial.println("[MOTION] FORWARD - WEIGHT SENSOR UNAVAILABLE");
     return;
   }
 
