@@ -39,7 +39,7 @@ bool setAngle(int angleDegrees) {
 
     commandedAngleDegrees = static_cast<uint8_t>(angleDegrees);
     // Servo.write() clamps degree commands above 180. Map the arm's tested
-    // 0..200 degree command range explicitly onto its configured pulse range.
+    // 0..250 degree command range explicitly onto its configured pulse range.
     const int pulseWidthUs = map(
         commandedAngleDegrees,
         kMinimumAngleDegrees,

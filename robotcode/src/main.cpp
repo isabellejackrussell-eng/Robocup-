@@ -31,7 +31,7 @@ constexpr float kSteeringGain = 35.0f;
 constexpr int kMaximumSteeringCorrection = 70;
 constexpr int kCloseAlignmentTurnPower = 300;
 constexpr int kArmUpAngleDegrees = 40;
-constexpr int kArmDownAngleDegrees = 200;
+constexpr int kArmDownAngleDegrees = 250;
 constexpr int kArmStepDegrees = 2;
 constexpr uint32_t kArmStepPeriodMs = 20;
 constexpr uint32_t kArmDownHoldMs = 750;
@@ -153,7 +153,7 @@ void runCaptureArmCycle() {
     return;
   }
 
-  Serial.println("[CAPTURE] Weight in zone; sweeping arm 40 -> 200 degrees");
+  Serial.println("[CAPTURE] Weight in zone; sweeping arm 40 -> 250 degrees");
 
   for (int angle = kArmUpAngleDegrees;
        angle <= kArmDownAngleDegrees;

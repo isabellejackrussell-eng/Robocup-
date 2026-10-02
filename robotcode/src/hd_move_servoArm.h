@@ -8,7 +8,7 @@ namespace hd_move_servoArm {
 constexpr uint8_t kServoPin = 25;
 constexpr uint8_t kInitialAngleDegrees = 90;
 constexpr uint8_t kMinimumAngleDegrees = 0;
-constexpr uint8_t kMaximumAngleDegrees = 200;
+constexpr uint8_t kMaximumAngleDegrees = 250;
 
 bool initialise(uint8_t initialAngleDegrees = kInitialAngleDegrees);
 bool setAngle(int angleDegrees);
